@@ -105,6 +105,7 @@ typedef struct {
     pthread_mutex_t mutex;
     int cajas_completadas_ok;
     int cajas_completadas_fail;
+    bool trabajando_en_set;          // Si ya tomó piezas para un SET
     // Buffer de piezas retiradas esperando a ser colocadas
     Pieza buffer[MAX_BUFFER_CELDA];
     int buffer_count;
@@ -145,6 +146,10 @@ typedef struct {
     Estadisticas stats;
     int piezas_dispensadas_ciclo;    // Para trigger de balanceo cada Y piezas
     bool terminar;                   // Flag para terminar simulación
+    // Control de SETs completados
+    int sets_en_proceso;             // SETs que están siendo llenados actualmente
+    int sets_completados_total;      // Total de SETs completados (OK + pendientes de confirmar)
+    pthread_mutex_t mutex_sets;      // Mutex para control de sets
 } SistemaLego;
 
 // Funciones de utilidad

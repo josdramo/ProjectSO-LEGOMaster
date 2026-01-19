@@ -21,6 +21,7 @@ void inicializar_celda(CeldaEmpaquetado *celda, int id, int posicion,
     celda->estado = CELDA_ACTIVA;
     celda->cajas_completadas_ok = 0;
     celda->cajas_completadas_fail = 0;
+    celda->trabajando_en_set = false;
     pthread_mutex_init(&celda->mutex, NULL);
     
     // Semáforo para limitar brazos retirando (máx 2)
@@ -119,6 +120,13 @@ void notificar_operador(CeldaEmpaquetado *celda) {
                        celda->id + 1, sistema->stats.cajas_ok);
                 pthread_mutex_unlock(&sistema->stats.mutex);
                 
+                // Incrementar contador global de SETs completados
+                pthread_mutex_lock(&sistema->mutex_sets);
+                sistema->sets_completados_total++;
+                printf("[SISTEMA] SETs completados: %d / %d\n", 
+                       sistema->sets_completados_total, sistema->config.num_sets);
+                pthread_mutex_unlock(&sistema->mutex_sets);
+                
             } else if (strcasecmp(respuesta, "fail") == 0) {
                 respuesta_valida = true;
                 pthread_mutex_lock(&sistema->stats.mutex);
@@ -141,6 +149,18 @@ void notificar_operador(CeldaEmpaquetado *celda) {
     }
     celda->caja.completa = false;
     pthread_mutex_unlock(&celda->caja.mutex);
+    
+    // Marcar que esta celda ya no está trabajando en un SET
+    pthread_mutex_lock(&celda->mutex);
+    celda->trabajando_en_set = false;
+    pthread_mutex_unlock(&celda->mutex);
+    
+    // Decrementar contador de SETs en proceso
+    pthread_mutex_lock(&sistema->mutex_sets);
+    if (sistema->sets_en_proceso > 0) {
+        sistema->sets_en_proceso--;
+    }
+    pthread_mutex_unlock(&sistema->mutex_sets);
     
     printf("[CELDA %d] Caja retirada. Celda reactivada con caja vacía.\n\n", celda->id + 1);
 }
@@ -251,8 +271,33 @@ void* thread_brazo(void* arg) {
             continue;
         }
         
-        // FASE 1: Intentar retirar pieza de la banda (siempre, incluso esperando operador)
-        // Solo si no hay muchas piezas ya en buffer
+        // Si la celda está esperando al operador, NO tomar más piezas de la banda
+        // Las piezas deben pasar a la siguiente celda
+        if (estado_celda == CELDA_ESPERANDO_OP) {
+            usleep(50000);
+            continue;
+        }
+        
+        // Verificar si ya se completaron todos los SETs necesarios
+        pthread_mutex_lock(&sistema->mutex_sets);
+        int sets_completados = sistema->sets_completados_total;
+        int sets_en_proceso = sistema->sets_en_proceso;
+        int total_ocupados = sets_completados + sets_en_proceso;
+        pthread_mutex_unlock(&sistema->mutex_sets);
+        
+        // Verificar si esta celda ya está trabajando en un SET
+        pthread_mutex_lock(&celda->mutex);
+        bool ya_trabajando = celda->trabajando_en_set;
+        pthread_mutex_unlock(&celda->mutex);
+        
+        // Si ya hay suficientes SETs (completados + en proceso) Y esta celda NO está trabajando
+        // en uno, entonces no debe tomar nuevas piezas
+        if (!ya_trabajando && total_ocupados >= sistema->config.num_sets) {
+            usleep(50000);
+            continue;
+        }
+        
+        // FASE 1: Intentar retirar pieza de la banda (solo si celda activa)
         pthread_mutex_lock(&celda->buffer_mutex);
         int buffer_actual = celda->buffer_count;
         pthread_mutex_unlock(&celda->buffer_mutex);
@@ -262,26 +307,15 @@ void* thread_brazo(void* arg) {
                 PosicionBanda *pos = &sistema->banda.posiciones[celda->posicion_banda];
                 pthread_mutex_lock(&pos->mutex);
                 
-                // Buscar cualquier pieza útil (para este set o futuros)
+                // Buscar pieza que necesitamos para el SET actual
                 int pieza_encontrada = -1;
                 
-                // Si estamos activos, buscar pieza que necesitamos ahora
-                // Si esperamos operador, tomar cualquier pieza para el próximo set
                 pthread_mutex_lock(&celda->caja.mutex);
                 for (int p = 0; p < pos->num_piezas; p++) {
                     int tipo = pos->piezas[p].tipo;
-                    if (tipo > 0) {
-                        if (estado_celda == CELDA_ACTIVA) {
-                            // Solo tomar lo que necesitamos
-                            if (necesita_pieza_tipo(&celda->caja, tipo)) {
-                                pieza_encontrada = p;
-                                break;
-                            }
-                        } else {
-                            // Esperando operador: tomar cualquier pieza para el buffer
-                            pieza_encontrada = p;
-                            break;
-                        }
+                    if (tipo > 0 && necesita_pieza_tipo(&celda->caja, tipo)) {
+                        pieza_encontrada = p;
+                        break;
                     }
                 }
                 pthread_mutex_unlock(&celda->caja.mutex);
@@ -304,19 +338,6 @@ void* thread_brazo(void* arg) {
                     
                     usleep(30000);  // Tiempo de retirar
                     
-                    if (estado_celda == CELDA_ESPERANDO_OP) {
-                        // Guardar en buffer para después
-                        if (agregar_a_buffer(celda, pieza_tomada)) {
-                            printf("[CELDA %d][BRAZO %d] Guardó pieza tipo %s en buffer\n",
-                                   c+1, b+1, nombre_tipo_pieza(pieza_tomada.tipo));
-                        }
-                        pthread_mutex_lock(&brazo->mutex);
-                        brazo->estado = BRAZO_IDLE;
-                        brazo->pieza_actual.tipo = 0;
-                        pthread_mutex_unlock(&brazo->mutex);
-                        continue;
-                    }
-                    
                     // FASE 2: Colocar en la caja
                     sem_wait(&celda->caja.sem_acceso);
                     
@@ -331,6 +352,28 @@ void* thread_brazo(void* arg) {
                     if (tipo > 0 && tipo <= MAX_TIPOS_PIEZA && 
                         !celda->caja.completa &&
                         celda->caja.piezas_por_tipo[tipo - 1] < celda->caja.piezas_necesarias[tipo - 1]) {
+                        
+                        // Verificar si es la primera pieza del SET
+                        bool es_primera_pieza = true;
+                        for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                            if (celda->caja.piezas_por_tipo[t] > 0) {
+                                es_primera_pieza = false;
+                                break;
+                            }
+                        }
+                        
+                        // Si es la primera pieza, marcar que esta celda está trabajando en un SET
+                        if (es_primera_pieza) {
+                            pthread_mutex_lock(&celda->mutex);
+                            celda->trabajando_en_set = true;
+                            pthread_mutex_unlock(&celda->mutex);
+                            
+                            pthread_mutex_lock(&sistema->mutex_sets);
+                            sistema->sets_en_proceso++;
+                            printf("[SISTEMA] Celda %d inicia nuevo SET. En proceso: %d\n", 
+                                   c+1, sistema->sets_en_proceso);
+                            pthread_mutex_unlock(&sistema->mutex_sets);
+                        }
                         
                         celda->caja.piezas_por_tipo[tipo - 1]++;
                         brazo->piezas_movidas++;
@@ -400,6 +443,27 @@ void* thread_brazo(void* arg) {
                 if (celda->caja.piezas_por_tipo[tipo - 1] < celda->caja.piezas_necesarias[tipo - 1]) {
                     Pieza p = sacar_del_buffer(celda, tipo);
                     if (p.tipo > 0) {
+                        // Verificar si es la primera pieza del SET
+                        bool es_primera = true;
+                        for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                            if (celda->caja.piezas_por_tipo[t] > 0) {
+                                es_primera = false;
+                                break;
+                            }
+                        }
+                        
+                        if (es_primera) {
+                            pthread_mutex_lock(&celda->mutex);
+                            celda->trabajando_en_set = true;
+                            pthread_mutex_unlock(&celda->mutex);
+                            
+                            pthread_mutex_lock(&sistema->mutex_sets);
+                            sistema->sets_en_proceso++;
+                            printf("[SISTEMA] Celda %d inicia nuevo SET (buffer). En proceso: %d\n", 
+                                   c+1, sistema->sets_en_proceso);
+                            pthread_mutex_unlock(&sistema->mutex_sets);
+                        }
+                        
                         celda->caja.piezas_por_tipo[tipo - 1]++;
                         brazo->piezas_movidas++;
                         

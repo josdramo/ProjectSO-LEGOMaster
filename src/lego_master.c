@@ -207,6 +207,11 @@ static void inicializar_sistema(int argc, char* argv[]) {
 
     sistema->piezas_dispensadas_ciclo = 0;
     sistema->terminar = false;
+    
+    // Inicializar control de SETs
+    sistema->sets_en_proceso = 0;
+    sistema->sets_completados_total = 0;
+    pthread_mutex_init(&sistema->mutex_sets, NULL);
 
     // Mostrar configuración
     int total_piezas_set = sistema->config.piezas_por_tipo[0] +

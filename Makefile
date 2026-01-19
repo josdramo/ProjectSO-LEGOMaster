@@ -1,15 +1,27 @@
 # Makefile para LEGO Master
 
 CC = gcc
-CFLAGS = -Wall -Wextra -pthread
+CFLAGS = -Wall -Wextra -pthread -I$(SRC_DIR)
 LDFLAGS = -lpthread -lrt
 
 SRC_DIR = src
 BUILD_DIR = build
 DEMOS_DIR = demos-4
 
-# Archivos fuente
-MAIN_SRC = $(SRC_DIR)/lego_master.c $(SRC_DIR)/utils.c
+# Archivos fuente del programa principal
+MAIN_SRCS = $(SRC_DIR)/lego_master.c \
+            $(SRC_DIR)/utils.c \
+            $(SRC_DIR)/banda.c \
+            $(SRC_DIR)/dispensador.c \
+            $(SRC_DIR)/celda.c
+
+# Headers
+HEADERS = $(SRC_DIR)/common.h \
+          $(SRC_DIR)/banda.h \
+          $(SRC_DIR)/dispensador.h \
+          $(SRC_DIR)/celda.h
+
+# Demos originales
 DISPENSERS_SRC = $(DEMOS_DIR)/dispensers.c
 BANDA_SRC = $(DEMOS_DIR)/banda.c
 
@@ -18,15 +30,19 @@ MAIN_TARGET = $(BUILD_DIR)/lego_master
 DISPENSERS_TARGET = $(BUILD_DIR)/dispensers
 BANDA_TARGET = $(BUILD_DIR)/banda
 
-.PHONY: all clean run demo help
+.PHONY: all clean run demo demo-old help
 
 all: $(BUILD_DIR) $(MAIN_TARGET) $(DISPENSERS_TARGET) $(BANDA_TARGET)
+	@echo ""
+	@echo "✓ Compilación exitosa"
+	@echo "  Ejecutable principal: $(MAIN_TARGET)"
+	@echo ""
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(MAIN_TARGET): $(MAIN_SRC)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+$(MAIN_TARGET): $(MAIN_SRCS) $(HEADERS)
+	$(CC) $(CFLAGS) -o $@ $(MAIN_SRCS) $(LDFLAGS)
 
 $(DISPENSERS_TARGET): $(DISPENSERS_SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

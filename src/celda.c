@@ -6,6 +6,8 @@
 #include "common.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <time.h>
 
@@ -33,6 +35,10 @@ void inicializar_celda(CeldaEmpaquetado *celda, int id, int posicion,
         celda->caja.piezas_necesarias[t] = piezas_por_tipo[t];
     }
     
+    // Inicializar buffer de piezas
+    celda->buffer_count = 0;
+    pthread_mutex_init(&celda->buffer_mutex, NULL);
+    
     // Inicializar brazos
     for (int b = 0; b < BRAZOS_POR_CELDA; b++) {
         celda->brazos[b].id = b;
@@ -47,6 +53,7 @@ void inicializar_celda(CeldaEmpaquetado *celda, int id, int posicion,
 void destruir_celda(CeldaEmpaquetado *celda) {
     pthread_mutex_destroy(&celda->mutex);
     pthread_mutex_destroy(&celda->caja.mutex);
+    pthread_mutex_destroy(&celda->buffer_mutex);
     sem_destroy(&celda->caja.sem_acceso);
     sem_destroy(&celda->sem_brazos_retirando);
     
@@ -71,39 +78,71 @@ bool necesita_pieza_tipo(CajaEmpaquetado *caja, int tipo) {
 }
 
 void notificar_operador(CeldaEmpaquetado *celda) {
-    // Simula tiempo de espera del operador (0 a delta_t1 segundos)
-    int delay = rand() % (sistema->config.delta_t1_max + 1);
-    usleep(delay * 1000);
+    char respuesta[10];
+    bool respuesta_valida = false;
     
-    // Verificar si la caja está correctamente llena
-    bool ok = verificar_caja_completa(&celda->caja);
+    // Mostrar contenido de la caja al operador
+    printf("\n");
+    printf("╔═══════════════════════════════════════════════════════════════╗\n");
+    printf("║          🔔 CELDA %d - CAJA LISTA PARA REVISIÓN              ║\n", celda->id + 1);
+    printf("╠═══════════════════════════════════════════════════════════════╣\n");
+    printf("║  Contenido de la caja:                                        ║\n");
     
-    pthread_mutex_lock(&sistema->stats.mutex);
-    if (ok) {
-        sistema->stats.cajas_ok++;
-        celda->cajas_completadas_ok++;
-        printf("[CELDA %d] ✓ Operador: OK - Caja #%d completada correctamente\n", 
-               celda->id + 1, sistema->stats.cajas_ok);
-    } else {
-        sistema->stats.cajas_fail++;
-        celda->cajas_completadas_fail++;
-        printf("[CELDA %d] ✗ Operador: FAIL - Caja incorrecta (", celda->id + 1);
-        for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
-            printf("%s:%d/%d ", nombre_tipo_pieza(t+1),
-                   celda->caja.piezas_por_tipo[t],
-                   celda->caja.piezas_necesarias[t]);
-        }
-        printf(")\n");
+    pthread_mutex_lock(&celda->caja.mutex);
+    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+        printf("║    Tipo %s: %d / %d piezas                                    ║\n",
+               nombre_tipo_pieza(t + 1),
+               celda->caja.piezas_por_tipo[t],
+               celda->caja.piezas_necesarias[t]);
     }
-    pthread_mutex_unlock(&sistema->stats.mutex);
+    pthread_mutex_unlock(&celda->caja.mutex);
     
-    // Reiniciar la caja
+    printf("╠═══════════════════════════════════════════════════════════════╣\n");
+    printf("║  ¿La caja está correcta? (ok/fail):                           ║\n");
+    printf("╚═══════════════════════════════════════════════════════════════╝\n");
+    
+    // Esperar respuesta del operador humano
+    while (!respuesta_valida && !sistema->terminar) {
+        printf("[CELDA %d] Operador, ingrese 'ok' o 'fail': ", celda->id + 1);
+        fflush(stdout);
+        
+        if (fgets(respuesta, sizeof(respuesta), stdin) != NULL) {
+            // Eliminar salto de línea
+            respuesta[strcspn(respuesta, "\n")] = 0;
+            
+            if (strcasecmp(respuesta, "ok") == 0) {
+                respuesta_valida = true;
+                pthread_mutex_lock(&sistema->stats.mutex);
+                sistema->stats.cajas_ok++;
+                celda->cajas_completadas_ok++;
+                printf("[CELDA %d] ✓ Operador confirmó: OK - Caja #%d completada correctamente\n", 
+                       celda->id + 1, sistema->stats.cajas_ok);
+                pthread_mutex_unlock(&sistema->stats.mutex);
+                
+            } else if (strcasecmp(respuesta, "fail") == 0) {
+                respuesta_valida = true;
+                pthread_mutex_lock(&sistema->stats.mutex);
+                sistema->stats.cajas_fail++;
+                celda->cajas_completadas_fail++;
+                printf("[CELDA %d] ✗ Operador confirmó: FAIL - Caja marcada como incorrecta\n", 
+                       celda->id + 1);
+                pthread_mutex_unlock(&sistema->stats.mutex);
+                
+            } else {
+                printf("[CELDA %d] Respuesta no válida. Use 'ok' o 'fail'.\n", celda->id + 1);
+            }
+        }
+    }
+    
+    // Reiniciar la caja para el siguiente SET
     pthread_mutex_lock(&celda->caja.mutex);
     for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
         celda->caja.piezas_por_tipo[t] = 0;
     }
     celda->caja.completa = false;
     pthread_mutex_unlock(&celda->caja.mutex);
+    
+    printf("[CELDA %d] Caja retirada. Celda reactivada con caja vacía.\n\n", celda->id + 1);
 }
 
 int encontrar_brazo_max_piezas(CeldaEmpaquetado *celda) {
@@ -121,6 +160,59 @@ int encontrar_brazo_max_piezas(CeldaEmpaquetado *celda) {
     }
     
     return brazo_max;
+}
+
+// Agregar pieza al buffer de la celda
+static bool agregar_a_buffer(CeldaEmpaquetado *celda, Pieza pieza) {
+    pthread_mutex_lock(&celda->buffer_mutex);
+    if (celda->buffer_count >= MAX_BUFFER_CELDA) {
+        pthread_mutex_unlock(&celda->buffer_mutex);
+        return false;
+    }
+    celda->buffer[celda->buffer_count++] = pieza;
+    pthread_mutex_unlock(&celda->buffer_mutex);
+    return true;
+}
+
+// Buscar y sacar pieza del buffer que necesitemos
+static Pieza sacar_del_buffer(CeldaEmpaquetado *celda, int tipo_necesario) {
+    Pieza resultado = {0, 0};
+    pthread_mutex_lock(&celda->buffer_mutex);
+    
+    for (int i = 0; i < celda->buffer_count; i++) {
+        if (tipo_necesario == -1 || celda->buffer[i].tipo == tipo_necesario) {
+            resultado = celda->buffer[i];
+            // Compactar buffer
+            for (int j = i; j < celda->buffer_count - 1; j++) {
+                celda->buffer[j] = celda->buffer[j + 1];
+            }
+            celda->buffer_count--;
+            break;
+        }
+    }
+    
+    pthread_mutex_unlock(&celda->buffer_mutex);
+    return resultado;
+}
+
+// Verificar si hay pieza en buffer que necesitemos
+static bool hay_pieza_en_buffer(CeldaEmpaquetado *celda, CajaEmpaquetado *caja) {
+    bool encontrada = false;
+    pthread_mutex_lock(&celda->buffer_mutex);
+    pthread_mutex_lock(&caja->mutex);
+    
+    for (int i = 0; i < celda->buffer_count && !encontrada; i++) {
+        int tipo = celda->buffer[i].tipo;
+        if (tipo > 0 && tipo <= MAX_TIPOS_PIEZA) {
+            if (caja->piezas_por_tipo[tipo - 1] < caja->piezas_necesarias[tipo - 1]) {
+                encontrada = true;
+            }
+        }
+    }
+    
+    pthread_mutex_unlock(&caja->mutex);
+    pthread_mutex_unlock(&celda->buffer_mutex);
+    return encontrada;
 }
 
 void* thread_brazo(void* arg) {
@@ -149,131 +241,204 @@ void* thread_brazo(void* arg) {
         }
         pthread_mutex_unlock(&brazo->mutex);
         
-        // Verificar si la celda está activa
+        // Verificar estado de la celda
         pthread_mutex_lock(&celda->mutex);
-        if (celda->estado != CELDA_ACTIVA) {
-            pthread_mutex_unlock(&celda->mutex);
+        EstadoCelda estado_celda = celda->estado;
+        pthread_mutex_unlock(&celda->mutex);
+        
+        if (estado_celda == CELDA_INACTIVA) {
             usleep(100000);
             continue;
         }
-        pthread_mutex_unlock(&celda->mutex);
         
-        // Intentar retirar una pieza de la banda (máx 2 brazos simultáneos)
-        if (sem_trywait(&celda->sem_brazos_retirando) == 0) {
-            PosicionBanda *pos = &sistema->banda.posiciones[celda->posicion_banda];
-            pthread_mutex_lock(&pos->mutex);
-            
-            // Buscar una pieza que necesitemos
-            int pieza_encontrada = -1;
-            
-            pthread_mutex_lock(&celda->caja.mutex);
-            for (int p = 0; p < pos->num_piezas; p++) {
-                int tipo = pos->piezas[p].tipo;
-                if (tipo > 0 && necesita_pieza_tipo(&celda->caja, tipo)) {
-                    pieza_encontrada = p;
-                    break;
-                }
-            }
-            pthread_mutex_unlock(&celda->caja.mutex);
-            
-            if (pieza_encontrada >= 0) {
-                // Retirar la pieza
-                pthread_mutex_lock(&brazo->mutex);
-                brazo->estado = BRAZO_RETIRANDO;
-                brazo->pieza_actual = pos->piezas[pieza_encontrada];
-                pthread_mutex_unlock(&brazo->mutex);
+        // FASE 1: Intentar retirar pieza de la banda (siempre, incluso esperando operador)
+        // Solo si no hay muchas piezas ya en buffer
+        pthread_mutex_lock(&celda->buffer_mutex);
+        int buffer_actual = celda->buffer_count;
+        pthread_mutex_unlock(&celda->buffer_mutex);
+        
+        if (buffer_actual < MAX_BUFFER_CELDA - 2) {
+            if (sem_trywait(&celda->sem_brazos_retirando) == 0) {
+                PosicionBanda *pos = &sistema->banda.posiciones[celda->posicion_banda];
+                pthread_mutex_lock(&pos->mutex);
                 
-                // Quitar pieza de la banda
-                for (int p = pieza_encontrada; p < pos->num_piezas - 1; p++) {
-                    pos->piezas[p] = pos->piezas[p + 1];
-                }
-                pos->num_piezas--;
+                // Buscar cualquier pieza útil (para este set o futuros)
+                int pieza_encontrada = -1;
                 
-                pthread_mutex_unlock(&pos->mutex);
-                sem_post(&celda->sem_brazos_retirando);
-                
-                usleep(50000);  // Simular tiempo de retirar
-                
-                // Colocar en la caja (solo 1 brazo a la vez)
-                sem_wait(&celda->caja.sem_acceso);
-                
-                pthread_mutex_lock(&brazo->mutex);
-                brazo->estado = BRAZO_COLOCANDO;
-                pthread_mutex_unlock(&brazo->mutex);
-                
+                // Si estamos activos, buscar pieza que necesitamos ahora
+                // Si esperamos operador, tomar cualquier pieza para el próximo set
                 pthread_mutex_lock(&celda->caja.mutex);
+                for (int p = 0; p < pos->num_piezas; p++) {
+                    int tipo = pos->piezas[p].tipo;
+                    if (tipo > 0) {
+                        if (estado_celda == CELDA_ACTIVA) {
+                            // Solo tomar lo que necesitamos
+                            if (necesita_pieza_tipo(&celda->caja, tipo)) {
+                                pieza_encontrada = p;
+                                break;
+                            }
+                        } else {
+                            // Esperando operador: tomar cualquier pieza para el buffer
+                            pieza_encontrada = p;
+                            break;
+                        }
+                    }
+                }
+                pthread_mutex_unlock(&celda->caja.mutex);
                 
-                int tipo = brazo->pieza_actual.tipo;
-                
-                // Verificar de nuevo si necesitamos esta pieza
-                if (tipo > 0 && tipo <= MAX_TIPOS_PIEZA && 
-                    !celda->caja.completa &&
-                    celda->caja.piezas_por_tipo[tipo - 1] < celda->caja.piezas_necesarias[tipo - 1]) {
+                if (pieza_encontrada >= 0) {
+                    Pieza pieza_tomada = pos->piezas[pieza_encontrada];
                     
-                    celda->caja.piezas_por_tipo[tipo - 1]++;
-                    brazo->piezas_movidas++;
+                    // Quitar pieza de la banda
+                    for (int p = pieza_encontrada; p < pos->num_piezas - 1; p++) {
+                        pos->piezas[p] = pos->piezas[p + 1];
+                    }
+                    pos->num_piezas--;
+                    pthread_mutex_unlock(&pos->mutex);
+                    sem_post(&celda->sem_brazos_retirando);
                     
-                    pthread_mutex_lock(&sistema->stats.mutex);
-                    sistema->stats.piezas_por_brazo[c][b]++;
-                    pthread_mutex_unlock(&sistema->stats.mutex);
+                    pthread_mutex_lock(&brazo->mutex);
+                    brazo->estado = BRAZO_RETIRANDO;
+                    brazo->pieza_actual = pieza_tomada;
+                    pthread_mutex_unlock(&brazo->mutex);
                     
-                    printf("[CELDA %d][BRAZO %d] Colocó pieza tipo %s [%d/%d]\n",
-                           c+1, b+1, nombre_tipo_pieza(tipo),
-                           celda->caja.piezas_por_tipo[tipo - 1],
-                           celda->caja.piezas_necesarias[tipo - 1]);
+                    usleep(30000);  // Tiempo de retirar
                     
-                    // Verificar si el SET está completo
-                    if (verificar_caja_completa(&celda->caja)) {
-                        celda->caja.completa = true;
-                        printf("[CELDA %d][BRAZO %d] ★ ¡SET COMPLETO! Notificando operador...\n",
-                               c+1, b+1);
-                        
-                        pthread_mutex_unlock(&celda->caja.mutex);
-                        sem_post(&celda->caja.sem_acceso);
-                        
-                        pthread_mutex_lock(&celda->mutex);
-                        celda->estado = CELDA_ESPERANDO_OP;
-                        pthread_mutex_unlock(&celda->mutex);
-                        
-                        notificar_operador(celda);
-                        
-                        pthread_mutex_lock(&celda->mutex);
-                        celda->estado = CELDA_ACTIVA;
-                        pthread_mutex_unlock(&celda->mutex);
-                        
+                    if (estado_celda == CELDA_ESPERANDO_OP) {
+                        // Guardar en buffer para después
+                        if (agregar_a_buffer(celda, pieza_tomada)) {
+                            printf("[CELDA %d][BRAZO %d] Guardó pieza tipo %s en buffer\n",
+                                   c+1, b+1, nombre_tipo_pieza(pieza_tomada.tipo));
+                        }
                         pthread_mutex_lock(&brazo->mutex);
                         brazo->estado = BRAZO_IDLE;
                         brazo->pieza_actual.tipo = 0;
                         pthread_mutex_unlock(&brazo->mutex);
-                        
                         continue;
                     }
-                } else if (tipo > 0) {
-                    // La pieza ya no se necesita, devolverla a la banda
-                    printf("[CELDA %d][BRAZO %d] Pieza tipo %s ya no necesaria, devuelta\n",
-                           c+1, b+1, nombre_tipo_pieza(tipo));
                     
-                    PosicionBanda *pos_dev = &sistema->banda.posiciones[celda->posicion_banda];
-                    pthread_mutex_lock(&pos_dev->mutex);
-                    if (pos_dev->num_piezas < MAX_PIEZAS_POS) {
-                        pos_dev->piezas[pos_dev->num_piezas] = brazo->pieza_actual;
-                        pos_dev->num_piezas++;
+                    // FASE 2: Colocar en la caja
+                    sem_wait(&celda->caja.sem_acceso);
+                    
+                    pthread_mutex_lock(&brazo->mutex);
+                    brazo->estado = BRAZO_COLOCANDO;
+                    pthread_mutex_unlock(&brazo->mutex);
+                    
+                    pthread_mutex_lock(&celda->caja.mutex);
+                    
+                    int tipo = brazo->pieza_actual.tipo;
+                    
+                    if (tipo > 0 && tipo <= MAX_TIPOS_PIEZA && 
+                        !celda->caja.completa &&
+                        celda->caja.piezas_por_tipo[tipo - 1] < celda->caja.piezas_necesarias[tipo - 1]) {
+                        
+                        celda->caja.piezas_por_tipo[tipo - 1]++;
+                        brazo->piezas_movidas++;
+                        
+                        pthread_mutex_lock(&sistema->stats.mutex);
+                        sistema->stats.piezas_por_brazo[c][b]++;
+                        pthread_mutex_unlock(&sistema->stats.mutex);
+                        
+                        printf("[CELDA %d][BRAZO %d] Colocó pieza tipo %s [%d/%d]\n",
+                               c+1, b+1, nombre_tipo_pieza(tipo),
+                               celda->caja.piezas_por_tipo[tipo - 1],
+                               celda->caja.piezas_necesarias[tipo - 1]);
+                        
+                        if (verificar_caja_completa(&celda->caja)) {
+                            celda->caja.completa = true;
+                            printf("[CELDA %d][BRAZO %d] ★ ¡SET COMPLETO! Notificando operador...\n",
+                                   c+1, b+1);
+                            
+                            pthread_mutex_unlock(&celda->caja.mutex);
+                            sem_post(&celda->caja.sem_acceso);
+                            
+                            pthread_mutex_lock(&celda->mutex);
+                            celda->estado = CELDA_ESPERANDO_OP;
+                            pthread_mutex_unlock(&celda->mutex);
+                            
+                            notificar_operador(celda);
+                            
+                            pthread_mutex_lock(&celda->mutex);
+                            celda->estado = CELDA_ACTIVA;
+                            pthread_mutex_unlock(&celda->mutex);
+                            
+                            pthread_mutex_lock(&brazo->mutex);
+                            brazo->estado = BRAZO_IDLE;
+                            brazo->pieza_actual.tipo = 0;
+                            pthread_mutex_unlock(&brazo->mutex);
+                            
+                            continue;
+                        }
+                    } else if (tipo > 0) {
+                        // No necesitamos esta pieza, al buffer
+                        agregar_a_buffer(celda, brazo->pieza_actual);
                     }
-                    pthread_mutex_unlock(&pos_dev->mutex);
+                    
+                    pthread_mutex_unlock(&celda->caja.mutex);
+                    sem_post(&celda->caja.sem_acceso);
+                    
+                    pthread_mutex_lock(&brazo->mutex);
+                    brazo->estado = BRAZO_IDLE;
+                    brazo->pieza_actual.tipo = 0;
+                    pthread_mutex_unlock(&brazo->mutex);
+                    
+                } else {
+                    pthread_mutex_unlock(&pos->mutex);
+                    sem_post(&celda->sem_brazos_retirando);
                 }
-                
-                pthread_mutex_unlock(&celda->caja.mutex);
-                sem_post(&celda->caja.sem_acceso);
-                
-                pthread_mutex_lock(&brazo->mutex);
-                brazo->estado = BRAZO_IDLE;
-                brazo->pieza_actual.tipo = 0;
-                pthread_mutex_unlock(&brazo->mutex);
-                
-            } else {
-                pthread_mutex_unlock(&pos->mutex);
-                sem_post(&celda->sem_brazos_retirando);
             }
+        }
+        
+        // FASE 3: Si la celda está activa, intentar usar piezas del buffer
+        if (estado_celda == CELDA_ACTIVA && hay_pieza_en_buffer(celda, &celda->caja)) {
+            sem_wait(&celda->caja.sem_acceso);
+            
+            pthread_mutex_lock(&celda->caja.mutex);
+            
+            // Buscar en buffer una pieza que necesitemos
+            for (int tipo = 1; tipo <= MAX_TIPOS_PIEZA; tipo++) {
+                if (celda->caja.piezas_por_tipo[tipo - 1] < celda->caja.piezas_necesarias[tipo - 1]) {
+                    Pieza p = sacar_del_buffer(celda, tipo);
+                    if (p.tipo > 0) {
+                        celda->caja.piezas_por_tipo[tipo - 1]++;
+                        brazo->piezas_movidas++;
+                        
+                        pthread_mutex_lock(&sistema->stats.mutex);
+                        sistema->stats.piezas_por_brazo[c][b]++;
+                        pthread_mutex_unlock(&sistema->stats.mutex);
+                        
+                        printf("[CELDA %d][BRAZO %d] Del buffer: pieza tipo %s [%d/%d]\n",
+                               c+1, b+1, nombre_tipo_pieza(tipo),
+                               celda->caja.piezas_por_tipo[tipo - 1],
+                               celda->caja.piezas_necesarias[tipo - 1]);
+                        
+                        if (verificar_caja_completa(&celda->caja)) {
+                            celda->caja.completa = true;
+                            printf("[CELDA %d][BRAZO %d] ★ ¡SET COMPLETO! Notificando operador...\n",
+                                   c+1, b+1);
+                            
+                            pthread_mutex_unlock(&celda->caja.mutex);
+                            sem_post(&celda->caja.sem_acceso);
+                            
+                            pthread_mutex_lock(&celda->mutex);
+                            celda->estado = CELDA_ESPERANDO_OP;
+                            pthread_mutex_unlock(&celda->mutex);
+                            
+                            notificar_operador(celda);
+                            
+                            pthread_mutex_lock(&celda->mutex);
+                            celda->estado = CELDA_ACTIVA;
+                            pthread_mutex_unlock(&celda->mutex);
+                            
+                            continue;
+                        }
+                        break;  // Solo una pieza por iteración
+                    }
+                }
+            }
+            
+            pthread_mutex_unlock(&celda->caja.mutex);
+            sem_post(&celda->caja.sem_acceso);
         }
         
         usleep(10000);

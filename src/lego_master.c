@@ -36,25 +36,99 @@ static pthread_t hilos_brazos[MAX_CELDAS][BRAZOS_POR_CELDA];
 static void inicializar_sistema(int argc, char* argv[]);
 static void limpiar_recursos(void);
 static void manejador_senal(int sig);
+static void mostrar_ayuda(const char* programa);
+
+// ============================================================================
+// AYUDA Y USO
+// ============================================================================
+
+static void mostrar_ayuda(const char* programa) {
+    printf("\n");
+    printf("╔═══════════════════════════════════════════════════════════════════╗\n");
+    printf("║                    LEGO MASTER - AYUDA                            ║\n");
+    printf("╚═══════════════════════════════════════════════════════════════════╝\n\n");
+    
+    printf("DESCRIPCIÓN:\n");
+    printf("  Simulación de una planta empacadora de bloques LEGO.\n");
+    printf("  Una banda transportadora mueve piezas desde dispensadores hasta\n");
+    printf("  celdas de empaquetado donde brazos robóticos las colocan en cajas.\n\n");
+    
+    printf("USO:\n");
+    printf("  %s [OPCIONES]\n", programa);
+    printf("  %s <dispensadores> <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n\n", programa);
+    
+    printf("OPCIONES:\n");
+    printf("  -h, --help     Muestra esta ayuda y termina\n");
+    printf("  -v, --version  Muestra la versión del programa\n\n");
+    
+    printf("PARÁMETROS:\n");
+    printf("  dispensadores  Número de dispensadores de piezas (entero > 0)\n");
+    printf("  celdas         Número de celdas de empaquetado (1-%d)\n", MAX_CELDAS);
+    printf("  sets           Número de SETs/cajas a completar (entero > 0)\n");
+    printf("  pA             Piezas de tipo A por cada SET (entero >= 0)\n");
+    printf("  pB             Piezas de tipo B por cada SET (entero >= 0)\n");
+    printf("  pC             Piezas de tipo C por cada SET (entero >= 0)\n");
+    printf("  pD             Piezas de tipo D por cada SET (entero >= 0)\n");
+    printf("  velocidad      Velocidad de la banda en pasos/segundo (entero > 0)\n");
+    printf("  longitud       Longitud de la banda en posiciones (1-%d)\n\n", MAX_POSICIONES);
+    
+    printf("FUNCIONAMIENTO:\n");
+    printf("  • Los dispensadores sueltan piezas al inicio de la banda\n");
+    printf("  • La banda mueve las piezas a velocidad constante\n");
+    printf("  • Las celdas tienen 4 brazos robóticos cada una\n");
+    printf("  • Máximo 2 brazos pueden retirar piezas simultáneamente\n");
+    printf("  • Solo 1 brazo puede colocar piezas en la caja a la vez\n");
+    printf("  • Al completar un SET, el operador debe confirmar (ok/fail)\n");
+    printf("  • Las piezas no recogidas caen al tacho al final de la banda\n\n");
+    
+    printf("EJEMPLOS:\n");
+    printf("  %s 4 2 3 3 2 2 1 3 25\n", programa);
+    printf("      4 dispensadores, 2 celdas, 3 sets\n");
+    printf("      Cada SET: 3A + 2B + 2C + 1D = 8 piezas\n");
+    printf("      Banda: velocidad 3, longitud 25\n\n");
+    
+    printf("  %s 3 1 5 2 2 1 1 2 20\n", programa);
+    printf("      3 dispensadores, 1 celda, 5 sets\n");
+    printf("      Cada SET: 2A + 2B + 1C + 1D = 6 piezas\n");
+    printf("      Banda: velocidad 2, longitud 20\n\n");
+    
+    printf("CONTROLES DURANTE LA EJECUCIÓN:\n");
+    printf("  • Cuando una caja esté lista, escriba 'ok' o 'fail' + Enter\n");
+    printf("  • Presione Ctrl+C para terminar la simulación\n\n");
+    
+    printf("AUTORES:\n");
+    printf("  Proyecto de Sistemas Operativos - LEGO Master\n\n");
+}
+
+static void mostrar_version(void) {
+    printf("LEGO Master v1.0.0\n");
+    printf("Simulador de planta empacadora de bloques\n");
+}
+
+static void mostrar_uso(const char* programa) {
+    fprintf(stderr, "Uso: %s <dispensadores> <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n", programa);
+    fprintf(stderr, "     %s --help para más información\n\n", programa);
+    fprintf(stderr, "Ejemplo:\n");
+    fprintf(stderr, "  %s 4 2 3 3 2 2 1 3 25\n", programa);
+}
 
 // ============================================================================
 // INICIALIZACIÓN DEL SISTEMA
 // ============================================================================
 
-static void mostrar_uso(const char* programa) {
-    fprintf(stderr, "Uso: %s <dispensadores> <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n\n", programa);
-    fprintf(stderr, "Parámetros:\n");
-    fprintf(stderr, "  dispensadores : Número de dispensadores de piezas\n");
-    fprintf(stderr, "  celdas        : Número de celdas de empaquetado (1-%d)\n", MAX_CELDAS);
-    fprintf(stderr, "  sets          : Número de SETs a completar\n");
-    fprintf(stderr, "  pA, pB, pC, pD: Piezas de cada tipo por SET\n");
-    fprintf(stderr, "  velocidad     : Velocidad de la banda (pasos/segundo)\n");
-    fprintf(stderr, "  longitud      : Longitud de la banda (posiciones)\n");
-    fprintf(stderr, "\nEjemplo:\n");
-    fprintf(stderr, "  %s 4 2 3 3 2 2 1 3 25\n", programa);
-}
-
 static void inicializar_sistema(int argc, char* argv[]) {
+    // Verificar opciones de ayuda
+    if (argc >= 2) {
+        if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
+            mostrar_ayuda(argv[0]);
+            exit(0);
+        }
+        if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+            mostrar_version();
+            exit(0);
+        }
+    }
+    
     if (argc < 10) {
         mostrar_uso(argv[0]);
         exit(1);

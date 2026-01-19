@@ -23,6 +23,7 @@
 #define MAX_CELDAS          4       // Máximo de celdas de empaquetado
 #define BRAZOS_POR_CELDA    4       // Brazos robóticos por celda
 #define MAX_BRAZOS_ACTIVOS  2       // Máx brazos retirando piezas simultáneamente
+#define MAX_BUFFER_CELDA    20      // Buffer de piezas esperando en celda
 
 // Keys para memoria compartida
 #define SHM_KEY_BANDA       2222
@@ -104,6 +105,10 @@ typedef struct {
     pthread_mutex_t mutex;
     int cajas_completadas_ok;
     int cajas_completadas_fail;
+    // Buffer de piezas retiradas esperando a ser colocadas
+    Pieza buffer[MAX_BUFFER_CELDA];
+    int buffer_count;
+    pthread_mutex_t buffer_mutex;
 } CeldaEmpaquetado;
 
 // Configuración del sistema

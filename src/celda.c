@@ -10,9 +10,25 @@
 #include <strings.h>
 #include <unistd.h>
 #include <time.h>
+#include <fcntl.h>
+#include <sys/select.h>
 
 // Variable externa del sistema
 extern SistemaLego *sistema;
+
+// Variables para el hilo del operador
+static pthread_t hilo_operador;
+static pthread_mutex_t mutex_operador = PTHREAD_MUTEX_INITIALIZER;
+static bool operador_activo = false;
+
+// Cola de celdas esperando confirmación del operador
+#define MAX_COLA_OPERADOR 10
+static int cola_celdas_esperando[MAX_COLA_OPERADOR];
+static int cola_inicio = 0;
+static int cola_fin = 0;
+static int cola_count = 0;
+static pthread_mutex_t mutex_cola = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond_cola = PTHREAD_COND_INITIALIZER;
 
 void inicializar_celda(CeldaEmpaquetado *celda, int id, int posicion,
                        int piezas_por_tipo[MAX_TIPOS_PIEZA]) {
@@ -78,68 +94,43 @@ bool necesita_pieza_tipo(CajaEmpaquetado *caja, int tipo) {
     return caja->piezas_por_tipo[tipo - 1] < caja->piezas_necesarias[tipo - 1];
 }
 
-void notificar_operador(CeldaEmpaquetado *celda) {
-    char respuesta[10];
-    bool respuesta_valida = false;
-    
-    // Mostrar contenido de la caja al operador
-    printf("\n");
-    printf("╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║          🔔 CELDA %d - CAJA LISTA PARA REVISIÓN              ║\n", celda->id + 1);
-    printf("╠═══════════════════════════════════════════════════════════════╣\n");
-    printf("║  Contenido de la caja:                                        ║\n");
-    
-    pthread_mutex_lock(&celda->caja.mutex);
-    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
-        printf("║    Tipo %s: %d / %d piezas                                    ║\n",
-               nombre_tipo_pieza(t + 1),
-               celda->caja.piezas_por_tipo[t],
-               celda->caja.piezas_necesarias[t]);
+// Agregar celda a la cola de espera del operador
+static void encolar_celda_operador(int celda_id) {
+    pthread_mutex_lock(&mutex_cola);
+    if (cola_count < MAX_COLA_OPERADOR) {
+        cola_celdas_esperando[cola_fin] = celda_id;
+        cola_fin = (cola_fin + 1) % MAX_COLA_OPERADOR;
+        cola_count++;
+        pthread_cond_signal(&cond_cola);
     }
-    pthread_mutex_unlock(&celda->caja.mutex);
+    pthread_mutex_unlock(&mutex_cola);
+}
+
+// Procesar respuesta del operador para una celda específica
+static void procesar_respuesta_operador(int celda_id, const char* respuesta) {
+    CeldaEmpaquetado *celda = &sistema->celdas[celda_id];
     
-    printf("╠═══════════════════════════════════════════════════════════════╣\n");
-    printf("║  ¿La caja está correcta? (ok/fail):                           ║\n");
-    printf("╚═══════════════════════════════════════════════════════════════╝\n");
-    
-    // Esperar respuesta del operador humano
-    while (!respuesta_valida && !sistema->terminar) {
-        printf("[CELDA %d] Operador, ingrese 'ok' o 'fail': ", celda->id + 1);
-        fflush(stdout);
+    if (strcasecmp(respuesta, "ok") == 0) {
+        pthread_mutex_lock(&sistema->stats.mutex);
+        sistema->stats.cajas_ok++;
+        celda->cajas_completadas_ok++;
+        printf("[CELDA %d] ✓ Operador confirmó: OK - Caja #%d completada correctamente\n", 
+               celda_id + 1, sistema->stats.cajas_ok);
+        pthread_mutex_unlock(&sistema->stats.mutex);
         
-        if (fgets(respuesta, sizeof(respuesta), stdin) != NULL) {
-            // Eliminar salto de línea
-            respuesta[strcspn(respuesta, "\n")] = 0;
-            
-            if (strcasecmp(respuesta, "ok") == 0) {
-                respuesta_valida = true;
-                pthread_mutex_lock(&sistema->stats.mutex);
-                sistema->stats.cajas_ok++;
-                celda->cajas_completadas_ok++;
-                printf("[CELDA %d] ✓ Operador confirmó: OK - Caja #%d completada correctamente\n", 
-                       celda->id + 1, sistema->stats.cajas_ok);
-                pthread_mutex_unlock(&sistema->stats.mutex);
-                
-                // Incrementar contador global de SETs completados
-                pthread_mutex_lock(&sistema->mutex_sets);
-                sistema->sets_completados_total++;
-                printf("[SISTEMA] SETs completados: %d / %d\n", 
-                       sistema->sets_completados_total, sistema->config.num_sets);
-                pthread_mutex_unlock(&sistema->mutex_sets);
-                
-            } else if (strcasecmp(respuesta, "fail") == 0) {
-                respuesta_valida = true;
-                pthread_mutex_lock(&sistema->stats.mutex);
-                sistema->stats.cajas_fail++;
-                celda->cajas_completadas_fail++;
-                printf("[CELDA %d] ✗ Operador confirmó: FAIL - Caja marcada como incorrecta\n", 
-                       celda->id + 1);
-                pthread_mutex_unlock(&sistema->stats.mutex);
-                
-            } else {
-                printf("[CELDA %d] Respuesta no válida. Use 'ok' o 'fail'.\n", celda->id + 1);
-            }
-        }
+        pthread_mutex_lock(&sistema->mutex_sets);
+        sistema->sets_completados_total++;
+        printf("[SISTEMA] SETs completados: %d / %d\n", 
+               sistema->sets_completados_total, sistema->config.num_sets);
+        pthread_mutex_unlock(&sistema->mutex_sets);
+        
+    } else if (strcasecmp(respuesta, "fail") == 0) {
+        pthread_mutex_lock(&sistema->stats.mutex);
+        sistema->stats.cajas_fail++;
+        celda->cajas_completadas_fail++;
+        printf("[CELDA %d] ✗ Operador confirmó: FAIL - Caja marcada como incorrecta\n", 
+               celda_id + 1);
+        pthread_mutex_unlock(&sistema->stats.mutex);
     }
     
     // Reiniciar la caja para el siguiente SET
@@ -153,6 +144,7 @@ void notificar_operador(CeldaEmpaquetado *celda) {
     // Marcar que esta celda ya no está trabajando en un SET
     pthread_mutex_lock(&celda->mutex);
     celda->trabajando_en_set = false;
+    celda->estado = CELDA_ACTIVA;
     pthread_mutex_unlock(&celda->mutex);
     
     // Decrementar contador de SETs en proceso
@@ -162,7 +154,170 @@ void notificar_operador(CeldaEmpaquetado *celda) {
     }
     pthread_mutex_unlock(&sistema->mutex_sets);
     
-    printf("[CELDA %d] Caja retirada. Celda reactivada con caja vacía.\n\n", celda->id + 1);
+    printf("[CELDA %d] Caja retirada. Celda reactivada con caja vacía.\n\n", celda_id + 1);
+}
+
+// Hilo dedicado del operador - maneja toda la entrada del usuario
+static void* thread_operador(void* arg) {
+    (void)arg;
+    char respuesta[64];
+    
+    printf("[OPERADOR] Hilo del operador iniciado\n");
+    
+    while (!sistema->terminar) {
+        // Esperar a que haya celdas en cola o verificar periódicamente
+        pthread_mutex_lock(&mutex_cola);
+        
+        // Esperar con timeout para poder verificar sistema->terminar
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 100000000; // 100ms timeout
+        if (ts.tv_nsec >= 1000000000) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000;
+        }
+        
+        while (cola_count == 0 && !sistema->terminar) {
+            pthread_cond_timedwait(&cond_cola, &mutex_cola, &ts);
+            // Actualizar timeout para la próxima espera
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += 100000000;
+            if (ts.tv_nsec >= 1000000000) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000;
+            }
+        }
+        
+        if (sistema->terminar) {
+            pthread_mutex_unlock(&mutex_cola);
+            break;
+        }
+        
+        // Obtener la siguiente celda de la cola
+        int celda_id = -1;
+        if (cola_count > 0) {
+            celda_id = cola_celdas_esperando[cola_inicio];
+            cola_inicio = (cola_inicio + 1) % MAX_COLA_OPERADOR;
+            cola_count--;
+        }
+        pthread_mutex_unlock(&mutex_cola);
+        
+        if (celda_id < 0) continue;
+        
+        CeldaEmpaquetado *celda = &sistema->celdas[celda_id];
+        
+        // Mostrar contenido de la caja al operador
+        printf("\n");
+        printf("╔═══════════════════════════════════════════════════════════════╗\n");
+        printf("║          🔔 CELDA %d - CAJA LISTA PARA REVISIÓN              ║\n", celda_id + 1);
+        printf("╠═══════════════════════════════════════════════════════════════╣\n");
+        printf("║  Contenido de la caja:                                        ║\n");
+        
+        pthread_mutex_lock(&celda->caja.mutex);
+        for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+            printf("║    Tipo %s: %d / %d piezas                                    ║\n",
+                   nombre_tipo_pieza(t + 1),
+                   celda->caja.piezas_por_tipo[t],
+                   celda->caja.piezas_necesarias[t]);
+        }
+        pthread_mutex_unlock(&celda->caja.mutex);
+        
+        printf("╠═══════════════════════════════════════════════════════════════╣\n");
+        printf("║  ¿La caja está correcta? (ok/fail):                           ║\n");
+        printf("╚═══════════════════════════════════════════════════════════════╝\n");
+        
+        // Leer respuesta con select() para poder verificar terminación
+        bool respuesta_valida = false;
+        while (!respuesta_valida && !sistema->terminar) {
+            printf("[CELDA %d] Operador, ingrese 'ok' o 'fail': ", celda_id + 1);
+            fflush(stdout);
+            
+            // Usar select con timeout para no bloquear indefinidamente
+            fd_set readfds;
+            struct timeval tv;
+            
+            FD_ZERO(&readfds);
+            FD_SET(STDIN_FILENO, &readfds);
+            tv.tv_sec = 0;
+            tv.tv_usec = 500000; // 500ms timeout
+            
+            int ready = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
+            
+            if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
+                if (fgets(respuesta, sizeof(respuesta), stdin) != NULL) {
+                    respuesta[strcspn(respuesta, "\n")] = 0;
+                    
+                    if (strcasecmp(respuesta, "ok") == 0 || strcasecmp(respuesta, "fail") == 0) {
+                        respuesta_valida = true;
+                        procesar_respuesta_operador(celda_id, respuesta);
+                    } else if (strlen(respuesta) > 0) {
+                        printf("[CELDA %d] Respuesta no válida. Use 'ok' o 'fail'.\n", celda_id + 1);
+                    }
+                } else {
+                    // EOF - stdin cerrado, terminar
+                    break;
+                }
+            }
+            // Si timeout, el loop continuará y verificará sistema->terminar
+        }
+        
+        // Si terminamos sin respuesta válida, procesar como OK automático
+        if (!respuesta_valida && sistema->terminar) {
+            printf("[CELDA %d] Sistema terminando, procesando como OK automático\n", celda_id + 1);
+            procesar_respuesta_operador(celda_id, "ok");
+        }
+    }
+    
+    printf("[OPERADOR] Hilo del operador terminado\n");
+    return NULL;
+}
+
+void iniciar_hilo_operador(void) {
+    pthread_mutex_lock(&mutex_operador);
+    if (!operador_activo) {
+        operador_activo = true;
+        cola_inicio = 0;
+        cola_fin = 0;
+        cola_count = 0;
+        pthread_create(&hilo_operador, NULL, thread_operador, NULL);
+    }
+    pthread_mutex_unlock(&mutex_operador);
+}
+
+void terminar_hilo_operador(void) {
+    pthread_mutex_lock(&mutex_operador);
+    if (operador_activo) {
+        operador_activo = false;
+        pthread_cond_broadcast(&cond_cola);
+        pthread_mutex_unlock(&mutex_operador);
+        pthread_join(hilo_operador, NULL);
+        
+        // Procesar todas las celdas que quedaron pendientes en la cola
+        pthread_mutex_lock(&mutex_cola);
+        while (cola_count > 0) {
+            int celda_id = cola_celdas_esperando[cola_inicio];
+            cola_inicio = (cola_inicio + 1) % MAX_COLA_OPERADOR;
+            cola_count--;
+            pthread_mutex_unlock(&mutex_cola);
+            
+            printf("[SISTEMA] Procesando celda %d pendiente como OK automático\n", celda_id + 1);
+            procesar_respuesta_operador(celda_id, "ok");
+            
+            pthread_mutex_lock(&mutex_cola);
+        }
+        pthread_mutex_unlock(&mutex_cola);
+    } else {
+        pthread_mutex_unlock(&mutex_operador);
+    }
+}
+
+// Nueva versión de notificar_operador - NO BLOQUEANTE
+void notificar_operador(CeldaEmpaquetado *celda) {
+    // Solo encolar la celda para que el hilo del operador la procese
+    encolar_celda_operador(celda->id);
+    
+    // NO bloqueamos aquí - el brazo puede continuar su loop
+    // El hilo del operador se encargará de procesar la respuesta
 }
 
 int encontrar_brazo_max_piezas(CeldaEmpaquetado *celda) {
@@ -399,11 +554,9 @@ void* thread_brazo(void* arg) {
                             celda->estado = CELDA_ESPERANDO_OP;
                             pthread_mutex_unlock(&celda->mutex);
                             
+                            // Notificar al operador (no bloqueante)
+                            // El hilo del operador se encargará de reactivar la celda
                             notificar_operador(celda);
-                            
-                            pthread_mutex_lock(&celda->mutex);
-                            celda->estado = CELDA_ACTIVA;
-                            pthread_mutex_unlock(&celda->mutex);
                             
                             pthread_mutex_lock(&brazo->mutex);
                             brazo->estado = BRAZO_IDLE;
@@ -488,11 +641,9 @@ void* thread_brazo(void* arg) {
                             celda->estado = CELDA_ESPERANDO_OP;
                             pthread_mutex_unlock(&celda->mutex);
                             
+                            // Notificar al operador (no bloqueante)
+                            // El hilo del operador se encargará de reactivar la celda
                             notificar_operador(celda);
-                            
-                            pthread_mutex_lock(&celda->mutex);
-                            celda->estado = CELDA_ACTIVA;
-                            pthread_mutex_unlock(&celda->mutex);
                             
                             continue;
                         }

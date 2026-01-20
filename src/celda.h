@@ -26,6 +26,12 @@ bool necesita_pieza_tipo(CajaEmpaquetado *caja, int tipo);
 // Notifica al operador humano y espera su respuesta
 void notificar_operador(CeldaEmpaquetado *celda);
 
+// Inicia el hilo del operador que maneja entrada de forma no bloqueante
+void iniciar_hilo_operador(void);
+
+// Termina el hilo del operador
+void terminar_hilo_operador(void);
+
 // Encuentra el brazo que ha movido más piezas
 int encontrar_brazo_max_piezas(CeldaEmpaquetado *celda);
 

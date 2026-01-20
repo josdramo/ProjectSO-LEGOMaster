@@ -285,6 +285,9 @@ int main(int argc, char *argv[]) {
     
     printf("Iniciando simulación...\n\n");
     
+    // Iniciar hilo del operador (maneja entrada de usuario de forma no bloqueante)
+    iniciar_hilo_operador();
+    
     // Crear hilo de la banda transportadora
     if (pthread_create(&hilo_banda, NULL, thread_banda, NULL) != 0) {
         perror("Error creando hilo de banda");
@@ -325,6 +328,9 @@ int main(int argc, char *argv[]) {
     // Asegurar que terminar está en true
     sistema->terminar = true;
     
+    // Terminar hilo del operador
+    terminar_hilo_operador();
+    
     // Esperar a los demás hilos
     pthread_join(hilo_banda, NULL);
     
@@ -332,6 +338,32 @@ int main(int argc, char *argv[]) {
         for (int b = 0; b < BRAZOS_POR_CELDA; b++) {
             pthread_join(hilos_brazos[c][b], NULL);
         }
+    }
+    
+    // Contabilizar piezas restantes en buffers de celdas (van al tacho)
+    for (int c = 0; c < sistema->config.num_celdas; c++) {
+        pthread_mutex_lock(&sistema->celdas[c].buffer_mutex);
+        for (int i = 0; i < sistema->celdas[c].buffer_count; i++) {
+            int tipo = sistema->celdas[c].buffer[i].tipo;
+            if (tipo > 0 && tipo <= MAX_TIPOS_PIEZA) {
+                sistema->stats.piezas_en_tacho[tipo - 1]++;
+                sistema->stats.total_piezas_tacho++;
+            }
+        }
+        pthread_mutex_unlock(&sistema->celdas[c].buffer_mutex);
+        
+        // También contar piezas en cajas incompletas
+        pthread_mutex_lock(&sistema->celdas[c].caja.mutex);
+        if (!sistema->celdas[c].caja.completa) {
+            for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                int en_caja = sistema->celdas[c].caja.piezas_por_tipo[t];
+                if (en_caja > 0) {
+                    sistema->stats.piezas_en_tacho[t] += en_caja;
+                    sistema->stats.total_piezas_tacho += en_caja;
+                }
+            }
+        }
+        pthread_mutex_unlock(&sistema->celdas[c].caja.mutex);
     }
     
     // Imprimir estadísticas finales

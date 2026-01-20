@@ -110,6 +110,9 @@ typedef struct {
     Pieza buffer[MAX_BUFFER_CELDA];
     int buffer_count;
     pthread_mutex_t buffer_mutex;
+    // Control de tiempo sin progreso (para devolución de piezas)
+    time_t ultimo_progreso;          // Última vez que se colocó una pieza
+    int ciclos_sin_progreso;         // Contador de ciclos sin avance
 } CeldaEmpaquetado;
 
 // Configuración del sistema

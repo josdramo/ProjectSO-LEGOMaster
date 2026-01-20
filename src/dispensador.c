@@ -112,9 +112,12 @@ void* thread_dispensador(void* arg) {
     printf("[DISPENSADORES] Esperando %d segundos para que la banda se vacíe...\n", tiempo_espera);
     sleep(tiempo_espera);
     
-    // Esperar a que todos los SETs sean confirmados por el operador
+    // Esperar a que todos los SETs sean confirmados por el operador (con timeout)
     printf("[DISPENSADORES] Esperando confirmación de SETs pendientes...\n");
-    while (!sistema->terminar) {
+    int timeout_confirmacion = 10; // máximo 10 segundos esperando confirmaciones
+    int tiempo_esperado = 0;
+    
+    while (!sistema->terminar && tiempo_esperado < timeout_confirmacion) {
         pthread_mutex_lock(&sistema->mutex_sets);
         int completados = sistema->sets_completados_total;
         int en_proceso = sistema->sets_en_proceso;
@@ -126,7 +129,7 @@ void* thread_dispensador(void* arg) {
             break;
         }
         
-        // Si no hay SETs en proceso y no se completaron todos, algo falló
+        // Si no hay SETs en proceso y no se completaron todos, terminar
         if (en_proceso == 0 && completados < sistema->config.num_sets) {
             printf("[DISPENSADORES] No hay más SETs en proceso. Terminando con %d/%d completados.\n",
                    completados, sistema->config.num_sets);
@@ -134,6 +137,11 @@ void* thread_dispensador(void* arg) {
         }
         
         usleep(500000);  // Revisar cada 0.5 segundos
+        tiempo_esperado++;
+    }
+    
+    if (tiempo_esperado >= timeout_confirmacion) {
+        printf("[DISPENSADORES] Timeout esperando confirmaciones. Terminando simulación.\n");
     }
     
     sistema->terminar = true;

@@ -35,6 +35,15 @@ void terminar_hilo_operador(void);
 // Encuentra el brazo que ha movido más piezas
 int encontrar_brazo_max_piezas(CeldaEmpaquetado *celda);
 
+// Verifica si la celda está estancada y debería devolver piezas
+bool celda_estancada(CeldaEmpaquetado *celda);
+
+// Devuelve las piezas de la caja/buffer a la banda para que otra celda las use
+void devolver_piezas_a_banda(CeldaEmpaquetado *celda);
+
+// Verifica si alguna celda posterior necesita piezas que esta celda tiene
+bool otra_celda_necesita_piezas(CeldaEmpaquetado *celda);
+
 // Función del hilo de un brazo robótico
 void* thread_brazo(void* arg);
 

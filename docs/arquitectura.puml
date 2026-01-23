@@ -1,0 +1,302 @@
+@startuml LEGO_Master_Architecture
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam classBackgroundColor #F8F8F8
+skinparam classBorderColor #333333
+skinparam arrowColor #666666
+skinparam stereotypeCBackgroundColor #ADD8E6
+skinparam packageBackgroundColor #EEEEEE
+
+title **LEGO Master - Diagrama de Arquitectura del Sistema**\nSimulación de Planta Empacadora con Hilos POSIX
+
+' ============================================
+' ENUMERACIONES
+' ============================================
+package "Enumeraciones" #FFFACD {
+    enum EstadoBrazo {
+        BRAZO_IDLE
+        BRAZO_RETIRANDO
+        BRAZO_COLOCANDO
+        BRAZO_SUSPENDIDO
+    }
+    
+    enum EstadoCelda {
+        CELDA_ACTIVA
+        CELDA_ESPERANDO_OP
+        CELDA_INACTIVA
+    }
+}
+
+' ============================================
+' ESTRUCTURAS DE DATOS PRINCIPALES
+' ============================================
+package "Estructuras de Datos" #E6F3FF {
+    class Pieza <<struct>> {
+        +int tipo
+        +int id_unico
+    }
+    
+    class PosicionBanda <<struct>> {
+        +Pieza piezas[MAX_PIEZAS_POS]
+        +int num_piezas
+        +pthread_mutex_t mutex
+    }
+    
+    class BandaTransportadora <<struct>> {
+        +PosicionBanda posiciones[MAX_POSICIONES]
+        +int longitud
+        +int velocidad
+        +bool activa
+        +pthread_mutex_t mutex_global
+    }
+    
+    class BrazoRobotico <<struct>> {
+        +int id
+        +int celda_id
+        +EstadoBrazo estado
+        +int piezas_movidas
+        +Pieza pieza_actual
+        +pthread_mutex_t mutex
+        +time_t tiempo_suspension
+    }
+    
+    class CajaEmpaquetado <<struct>> {
+        +int piezas_por_tipo[4]
+        +int piezas_necesarias[4]
+        +bool completa
+        +pthread_mutex_t mutex
+        +sem_t sem_acceso
+    }
+    
+    class CeldaEmpaquetado <<struct>> {
+        +int id
+        +int posicion_banda
+        +EstadoCelda estado
+        +BrazoRobotico brazos[4]
+        +CajaEmpaquetado caja
+        +sem_t sem_brazos_retirando
+        +pthread_mutex_t mutex
+        +Pieza buffer[MAX_BUFFER]
+        +int buffer_count
+        +bool trabajando_en_set
+        +bool devolviendo_piezas
+        +int ciclos_sin_progreso
+    }
+    
+    class ConfiguracionSistema <<struct>> {
+        +int num_dispensadores
+        +int num_celdas
+        +int num_sets
+        +int piezas_por_tipo[4]
+        +int longitud_banda
+        +int velocidad_banda
+        +int delta_t1_max
+        +int delta_t2
+        +int Y
+    }
+    
+    class Estadisticas <<struct>> {
+        +int total_piezas_dispensadas
+        +int piezas_en_tacho[4]
+        +int total_piezas_tacho
+        +int cajas_ok
+        +int cajas_fail
+        +int piezas_por_brazo[4][4]
+        +pthread_mutex_t mutex
+    }
+    
+    class SistemaLego <<struct>> {
+        +ConfiguracionSistema config
+        +BandaTransportadora banda
+        +CeldaEmpaquetado celdas[MAX_CELDAS]
+        +Estadisticas stats
+        +bool terminar
+        +int sets_en_proceso
+        +int sets_completados_total
+        +pthread_mutex_t mutex_sets
+        +bool celdas_habilitadas[4]
+        +int num_celdas_activas
+        +pthread_mutex_t mutex_celdas_dinamicas
+    }
+}
+
+' ============================================
+' MÓDULOS / HILOS
+' ============================================
+package "Hilos del Sistema" #E6FFE6 {
+    class "thread_banda" as ThreadBanda <<hilo>> {
+        --Función--
+        +void* thread_banda(void* arg)
+        ..Responsabilidades..
+        - Mover piezas cada 1/v segundos
+        - Enviar piezas al tacho al final
+        - Sincronizar con mutex por posición
+    }
+    
+    class "thread_dispensador" as ThreadDispensador <<hilo>> {
+        --Función--
+        +void* thread_dispensador(void* arg)
+        +int generar_id_pieza(void)
+        ..Responsabilidades..
+        - Dispensar piezas (80% prob)
+        - Limitar piezas/ciclo = num_dispensadores
+        - Trigger balanceo cada Y piezas
+    }
+    
+    class "thread_brazo" as ThreadBrazo <<hilo>> {
+        --Función--
+        +void* thread_brazo(void* arg)
+        ..Responsabilidades..
+        - Retirar piezas de banda (máx 2)
+        - Colocar en caja (máx 1)
+        - Usar buffer de piezas
+        - Verificar SET completo
+        - Liberar piezas si estancado
+    }
+    
+    class "thread_operador" as ThreadOperador <<hilo>> {
+        --Función--
+        +void* thread_operador(void* arg)
+        +void notificar_operador(celda)
+        +void iniciar_hilo_operador(void)
+        +void terminar_hilo_operador(void)
+        ..Responsabilidades..
+        - Procesar cola de celdas
+        - Verificar caja (OK/FAIL)
+        - Tiempo aleatorio 0-Δt₁
+    }
+    
+    class "thread_gestor_celdas" as ThreadGestor <<hilo>> {
+        --Función--
+        +void* thread_gestor_celdas(void* arg)
+        +bool celda_puede_quitarse(celda)
+        +bool quitar_celda_dinamica(id)
+        +bool agregar_celda_dinamica(id)
+        ..Responsabilidades..
+        - Monitorear celdas ociosas
+        - Desactivar celdas sin trabajo
+        - Reactivar si hay piezas al tacho
+    }
+}
+
+' ============================================
+' MÓDULO PRINCIPAL
+' ============================================
+package "Módulo Principal" #FFE6E6 {
+    class "lego_master" as Main <<main>> {
+        +SistemaLego* sistema
+        --Funciones--
+        +int main(int argc, char* argv[])
+        -void inicializar_sistema(argc, argv)
+        -void limpiar_recursos(void)
+        -void manejador_senal(int sig)
+        ..Responsabilidades..
+        - Crear todos los hilos
+        - Coordinar terminación
+        - Mostrar estadísticas
+    }
+}
+
+' ============================================
+' MÓDULOS AUXILIARES
+' ============================================
+package "Módulos Auxiliares" #FFF0E6 {
+    class "celda" as ModuloCelda <<módulo>> {
+        +void inicializar_celda(...)
+        +void destruir_celda(celda)
+        +bool verificar_caja_completa(caja)
+        +bool necesita_pieza_tipo(caja, tipo)
+        +void devolver_piezas_a_banda(celda)
+        +int encontrar_brazo_max_piezas(celda)
+    }
+    
+    class "banda" as ModuloBanda <<módulo>> {
+        +void inicializar_banda(banda, N, v)
+        +void destruir_banda(banda)
+        +int agregar_pieza_posicion(pos, pieza)
+        +int retirar_pieza_posicion(pos, tipo)
+    }
+    
+    class "utils" as ModuloUtils <<módulo>> {
+        +const char* nombre_tipo_pieza(tipo)
+        +void imprimir_estadisticas(...)
+        +void imprimir_estado_banda(...)
+        +void imprimir_estado_celda(...)
+    }
+}
+
+' ============================================
+' RELACIONES
+' ============================================
+
+' Composición
+SistemaLego *-- ConfiguracionSistema
+SistemaLego *-- BandaTransportadora
+SistemaLego *-- "1..4" CeldaEmpaquetado
+SistemaLego *-- Estadisticas
+
+BandaTransportadora *-- "N" PosicionBanda
+PosicionBanda *-- "0..10" Pieza
+
+CeldaEmpaquetado *-- "4" BrazoRobotico
+CeldaEmpaquetado *-- CajaEmpaquetado
+CeldaEmpaquetado *-- "0..20" Pieza : buffer
+
+BrazoRobotico *-- Pieza : pieza_actual
+
+' Estados
+BrazoRobotico ..> EstadoBrazo : usa
+CeldaEmpaquetado ..> EstadoCelda : usa
+
+' Hilos acceden a sistema
+Main ..> SistemaLego : crea y gestiona
+ThreadBanda ..> BandaTransportadora : mueve piezas
+ThreadDispensador ..> PosicionBanda : agrega piezas
+ThreadBrazo ..> CeldaEmpaquetado : manipula
+ThreadBrazo ..> BandaTransportadora : retira piezas
+ThreadOperador ..> CeldaEmpaquetado : verifica
+ThreadGestor ..> CeldaEmpaquetado : activa/desactiva
+
+' Módulos auxiliares
+Main ..> ModuloCelda : usa
+Main ..> ModuloBanda : usa
+Main ..> ModuloUtils : usa
+ThreadBrazo ..> ModuloCelda : usa
+
+' ============================================
+' NOTAS
+' ============================================
+note right of ThreadBrazo
+  **Sincronización:**
+  • sem_brazos_retirando (init=2)
+    → Máx 2 brazos retirando
+  • sem_acceso en caja (init=1)
+    → Solo 1 brazo colocando
+  • mutex por posición de banda
+    → Acceso exclusivo
+end note
+
+note right of ThreadDispensador
+  **Balanceo de Carga:**
+  Cada Y piezas dispensadas,
+  el brazo con más piezas
+  movidas se suspende por
+  Δt₂ segundos
+end note
+
+note bottom of ThreadGestor
+  **Gestión Dinámica (Pregunta 5):**
+  • Desactiva celdas ociosas
+  • Reactiva si piezas→tacho
+  • Mínimo 1 celda activa
+end note
+
+note left of ModuloCelda
+  **Garantía X piezas → X cajas:**
+  Si una celda no puede completar
+  su SET, devuelve las piezas a
+  la banda para otra celda
+end note
+
+@enduml

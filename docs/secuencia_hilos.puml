@@ -1,0 +1,189 @@
+@startuml LEGO_Master_Threads_Sequence
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #333333
+skinparam sequenceLifeLineBorderColor #666666
+
+title **LEGO Master - Diagrama de Secuencia de Hilos**\nFlujo de operación del sistema
+
+participant "main()" as Main #FFE6E6
+participant "thread_dispensador" as Disp #FFFACD
+participant "thread_banda" as Banda #E6F3FF
+participant "thread_brazo[c][b]" as Brazo #E6FFE6
+participant "thread_operador" as Op #FFE6FF
+participant "thread_gestor" as Gestor #FFF0E6
+
+' ============================================
+' FASE DE INICIALIZACIÓN
+' ============================================
+== Fase de Inicialización ==
+
+Main -> Main : inicializar_sistema(argc, argv)
+activate Main
+Main -> Main : inicializar_banda()
+Main -> Main : inicializar_celdas()
+Main -> Main : pthread_mutex_init()
+
+Main -> Op : pthread_create()
+activate Op #FFE6FF
+Op --> Main : hilo creado
+
+Main -> Banda : pthread_create()
+activate Banda #E6F3FF
+Banda --> Main : hilo creado
+
+loop Para cada celda c, brazo b
+    Main -> Brazo : pthread_create()
+    activate Brazo #E6FFE6
+    Brazo --> Main : hilo creado
+end
+
+Main -> Disp : pthread_create()
+activate Disp #FFFACD
+Disp --> Main : hilo creado
+
+Main -> Gestor : pthread_create()
+activate Gestor #FFF0E6
+Gestor --> Main : hilo creado
+
+' ============================================
+' FASE DE OPERACIÓN
+' ============================================
+== Fase de Operación ==
+
+loop Mientras total_piezas > 0
+    Disp -> Disp : usleep(intervalo)
+    
+    group Dispensar piezas [80% probabilidad por dispensador]
+        Disp -> Banda : pthread_mutex_lock(pos[0].mutex)
+        Disp -> Banda : Agregar pieza tipo aleatorio
+        Disp -> Disp : piezas_dispensadas_ciclo++
+        Disp -> Banda : pthread_mutex_unlock()
+    end
+    
+    alt Cada Y piezas dispensadas
+        Disp -> Brazo : Suspender brazo con más piezas
+        note right: Balanceo de carga\nΔt₂ segundos
+    end
+end
+
+Disp -> Main : Todas las piezas dispensadas
+deactivate Disp
+
+|||
+
+loop Mientras !terminar
+    Banda -> Banda : usleep(1/velocidad)
+    
+    group Mover banda
+        Banda -> Banda : Piezas en pos[N-1] → tacho
+        loop i = N-1 down to 1
+            Banda -> Banda : pos[i] = pos[i-1]
+        end
+        Banda -> Banda : pos[0] = vacío
+    end
+end
+
+|||
+
+loop Mientras !terminar
+    alt Celda habilitada AND brazo no suspendido
+        
+        group Fase 1: Retirar de banda [máx 2 brazos]
+            Brazo -> Brazo : sem_trywait(sem_brazos_retirando)
+            Brazo -> Banda : pthread_mutex_lock(pos[xi].mutex)
+            Brazo -> Banda : Buscar pieza necesaria
+            Brazo -> Brazo : Retirar pieza
+            Brazo -> Banda : pthread_mutex_unlock()
+            Brazo -> Brazo : sem_post(sem_brazos_retirando)
+        end
+        
+        group Fase 2: Colocar en caja [máx 1 brazo]
+            Brazo -> Brazo : sem_wait(caja.sem_acceso)
+            Brazo -> Brazo : pthread_mutex_lock(caja.mutex)
+            Brazo -> Brazo : caja.piezas_por_tipo[tipo]++
+            
+            alt SET completo
+                Brazo -> Op : notificar_operador(celda)
+                Brazo -> Brazo : celda.estado = ESPERANDO_OP
+            end
+            
+            Brazo -> Brazo : pthread_mutex_unlock()
+            Brazo -> Brazo : sem_post()
+        end
+        
+        group Fase 3: Usar buffer
+            Brazo -> Brazo : Mover piezas buffer → caja
+        end
+        
+        group Fase 4: Verificar estancamiento [solo brazo 0]
+            alt ciclos_sin_progreso > 200 AND no puede completar
+                Brazo -> Banda : devolver_piezas_a_banda()
+                note right: Libera piezas para\nque otra celda las use
+            end
+        end
+    end
+end
+
+|||
+
+loop Mientras !terminar
+    Op -> Op : pthread_cond_timedwait(cola)
+    
+    alt Celda en cola
+        Op -> Op : usleep(random 0..Δt₁)
+        Op -> Op : Verificar caja
+        
+        alt Caja correcta
+            Op -> Op : stats.cajas_ok++
+            Op -> Op : sets_completados_total++
+        else Caja incorrecta
+            Op -> Op : stats.cajas_fail++
+        end
+        
+        Op -> Brazo : celda.estado = ACTIVA
+        Op -> Brazo : celda.trabajando_en_set = false
+    end
+end
+
+|||
+
+loop Cada 2 segundos
+    Gestor -> Gestor : Analizar métricas
+    
+    alt Celdas ociosas > 0 AND pocos sets pendientes
+        Gestor -> Brazo : quitar_celda_dinamica()
+        note right: Desactiva celda\nociosa
+    end
+    
+    alt Muchas piezas al tacho
+        Gestor -> Brazo : agregar_celda_dinamica()
+        note right: Reactiva celda\ndesactivada
+    end
+end
+
+' ============================================
+' FASE DE TERMINACIÓN
+' ============================================
+== Fase de Terminación ==
+
+Main -> Main : sistema->terminar = true
+Main -> Op : terminar_hilo_operador()
+deactivate Op
+
+Main -> Banda : pthread_join()
+deactivate Banda
+
+Main -> Brazo : pthread_join() [todos]
+deactivate Brazo
+
+Main -> Gestor : pthread_join()
+deactivate Gestor
+
+Main -> Main : imprimir_estadisticas()
+Main -> Main : limpiar_recursos()
+deactivate Main
+
+@enduml

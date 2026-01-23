@@ -1,0 +1,148 @@
+@startuml LEGO_Master_Sync
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam componentBackgroundColor #F8F8F8
+skinparam noteBackgroundColor #FFFACD
+
+title **LEGO Master - Mecanismos de Sincronización**\nMutex y Semáforos del Sistema
+
+' ============================================
+' RECURSOS COMPARTIDOS
+' ============================================
+package "Recursos Compartidos" #E6F3FF {
+    
+    component "Banda Transportadora" as Banda {
+        [Posición 0] as P0
+        [Posición 1] as P1
+        [Posición xi] as Pxi
+        [Posición N-1] as PN
+        
+        P0 -[hidden]> P1
+        P1 -[hidden]> Pxi
+        Pxi -[hidden]> PN
+    }
+    
+    component "Celda i" as Celda {
+        [Caja Empaquetado] as Caja
+        [Buffer Piezas] as Buffer
+        [Estado Celda] as EstadoC
+    }
+    
+    component "Brazo b" as BrazoComp {
+        [Estado Brazo] as EstadoB
+        [Pieza Actual] as PiezaB
+    }
+    
+    component "Sistema Global" as Sistema {
+        [sets_en_proceso]
+        [sets_completados]
+        [celdas_habilitadas]
+        [Estadísticas]
+    }
+}
+
+' ============================================
+' MECANISMOS DE SINCRONIZACIÓN
+' ============================================
+package "Mecanismos de Sincronización" #E6FFE6 {
+    
+    component "Mutex" #FFE6E6 {
+        [pos[i].mutex] as MutexPos
+        [caja.mutex] as MutexCaja
+        [buffer_mutex] as MutexBuffer
+        [celda.mutex] as MutexCelda
+        [brazo.mutex] as MutexBrazo
+        [mutex_sets] as MutexSets
+        [mutex_celdas_dinamicas] as MutexDinam
+        [stats.mutex] as MutexStats
+    }
+    
+    component "Semáforos" #FFFACD {
+        [sem_brazos_retirando\n(init=2)] as SemRetirar
+        [caja.sem_acceso\n(init=1)] as SemCaja
+    }
+    
+    component "Condiciones" #E6E6FF {
+        [cond_cola] as CondCola
+    }
+}
+
+' ============================================
+' RELACIONES DE PROTECCIÓN
+' ============================================
+
+MutexPos --> P0 : protege
+MutexPos --> P1 : protege
+MutexPos --> Pxi : protege
+MutexPos --> PN : protege
+
+MutexCaja --> Caja : protege
+MutexBuffer --> Buffer : protege
+MutexCelda --> EstadoC : protege
+MutexBrazo --> EstadoB : protege
+MutexBrazo --> PiezaB : protege
+
+MutexSets --> [sets_en_proceso] : protege
+MutexSets --> [sets_completados] : protege
+MutexDinam --> [celdas_habilitadas] : protege
+MutexStats --> [Estadísticas] : protege
+
+SemRetirar --> Banda : controla acceso\n(máx 2 hilos)
+SemCaja --> Caja : controla acceso\n(máx 1 hilo)
+
+CondCola ..> [cond_cola] : señaliza
+
+' ============================================
+' NOTAS EXPLICATIVAS
+' ============================================
+
+note right of SemRetirar
+  **Requisito del Problema:**
+  "Solo dos brazos a la vez pueden
+  retirar piezas de la banda"
+  
+  Solución: sem_init(&sem, 0, 2)
+  - sem_trywait() para intentar
+  - sem_post() al terminar
+end note
+
+note right of SemCaja
+  **Requisito del Problema:**
+  "Solo uno a la vez puede colocar
+  la pieza retirada en la caja"
+  
+  Solución: sem_init(&sem, 0, 1)
+  - sem_wait() antes de colocar
+  - sem_post() después
+end note
+
+note bottom of MutexPos
+  **Acceso a Posiciones:**
+  Cada posición tiene su propio mutex
+  para permitir concurrencia máxima.
+  
+  Hilos que acceden:
+  • thread_banda (mover)
+  • thread_dispensador (agregar)
+  • thread_brazo (retirar)
+end note
+
+note bottom of MutexSets
+  **Control de SETs:**
+  Garantiza que no se asignen
+  más SETs de los necesarios.
+  
+  sets_en_proceso + sets_completados
+  ≤ config.num_sets
+end note
+
+note right of CondCola
+  **Cola del Operador:**
+  pthread_cond_timedwait()
+  permite verificar terminar
+  periódicamente sin bloquear
+  indefinidamente.
+end note
+
+@enduml

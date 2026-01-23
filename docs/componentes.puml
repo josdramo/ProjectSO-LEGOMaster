@@ -40,8 +40,7 @@ package "Hilos del Sistema" as THREADS #E3F2FD {
 
 package "Estructuras Compartidas" as DATA #FFEBEE {
     
-    database "SistemaLego\n(struct global)" as SL {
-    }
+    node "SistemaLego\n(struct global)" as SL
     
     node "BandaTransportadora\n──────────\n• posiciones[N]\n• velocidad\n• longitud" as BANDA
     

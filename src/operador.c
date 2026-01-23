@@ -2,7 +2,7 @@
  * LEGO Master - Implementación del Operador Humano
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 
 #include "operador.h"
 #include "common.h"

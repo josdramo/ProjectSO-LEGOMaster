@@ -2,7 +2,7 @@
  * LEGO Master - Implementación de Celdas de Empaquetado
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 
 #include "celda.h"
 #include "common.h"

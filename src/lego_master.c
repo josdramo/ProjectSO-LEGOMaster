@@ -59,14 +59,13 @@ static void mostrar_ayuda(const char* programa) {
     
     printf("USO:\n");
     printf("  %s [OPCIONES]\n", programa);
-    printf("  %s <dispensadores> <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n\n", programa);
+    printf("  %s <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n\n", programa);
     
     printf("OPCIONES:\n");
     printf("  -h, --help     Muestra esta ayuda y termina\n");
     printf("  -v, --version  Muestra la versión del programa\n\n");
     
     printf("PARÁMETROS:\n");
-    printf("  dispensadores  Número de dispensadores de piezas (entero > 0)\n");
     printf("  celdas         Número de celdas de empaquetado (1-%d)\n", MAX_CELDAS);
     printf("  sets           Número de SETs/cajas a completar (entero > 0)\n");
     printf("  pA             Piezas de tipo A por cada SET (entero >= 0)\n");
@@ -76,28 +75,29 @@ static void mostrar_ayuda(const char* programa) {
     printf("  velocidad      Velocidad de la banda en pasos/segundo (entero > 0)\n");
     printf("  longitud       Longitud de la banda en posiciones (1-%d)\n\n", MAX_POSICIONES);
     
+    printf("NOTA: El sistema usa 3 dispensadores fijos.\n\n");
+    
     printf("FUNCIONAMIENTO:\n");
-    printf("  • Los dispensadores sueltan piezas al inicio de la banda\n");
+    printf("  • Los 3 dispensadores sueltan piezas al inicio de la banda\n");
     printf("  • La banda mueve las piezas a velocidad constante\n");
     printf("  • Las celdas tienen 4 brazos robóticos cada una\n");
     printf("  • Máximo 2 brazos pueden retirar piezas simultáneamente\n");
     printf("  • Solo 1 brazo puede colocar piezas en la caja a la vez\n");
-    printf("  • Al completar un SET, el operador debe confirmar (ok/fail)\n");
+    printf("  • Al completar un SET, el operador verifica automáticamente\n");
     printf("  • Las piezas no recogidas caen al tacho al final de la banda\n\n");
     
     printf("EJEMPLOS:\n");
-    printf("  %s 4 2 3 3 2 2 1 3 25\n", programa);
-    printf("      4 dispensadores, 2 celdas, 3 sets\n");
+    printf("  %s 2 3 3 2 2 1 3 25\n", programa);
+    printf("      2 celdas, 3 sets\n");
     printf("      Cada SET: 3A + 2B + 2C + 1D = 8 piezas\n");
     printf("      Banda: velocidad 3, longitud 25\n\n");
     
-    printf("  %s 3 1 5 2 2 1 1 2 20\n", programa);
-    printf("      3 dispensadores, 1 celda, 5 sets\n");
+    printf("  %s 1 5 2 2 1 1 2 20\n", programa);
+    printf("      1 celda, 5 sets\n");
     printf("      Cada SET: 2A + 2B + 1C + 1D = 6 piezas\n");
     printf("      Banda: velocidad 2, longitud 20\n\n");
     
     printf("CONTROLES DURANTE LA EJECUCIÓN:\n");
-    printf("  • Cuando una caja esté lista, escriba 'ok' o 'fail' + Enter\n");
     printf("  • Presione Ctrl+C para terminar la simulación\n\n");
     
     printf("AUTORES:\n");
@@ -110,10 +110,10 @@ static void mostrar_version(void) {
 }
 
 static void mostrar_uso(const char* programa) {
-    fprintf(stderr, "Uso: %s <dispensadores> <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n", programa);
+    fprintf(stderr, "Uso: %s <celdas> <sets> <pA> <pB> <pC> <pD> <velocidad> <longitud>\n", programa);
     fprintf(stderr, "     %s --help para más información\n\n", programa);
     fprintf(stderr, "Ejemplo:\n");
-    fprintf(stderr, "  %s 4 2 3 3 2 2 1 3 25\n", programa);
+    fprintf(stderr, "  %s 2 3 3 2 2 1 3 25\n", programa);
 }
 
 // ============================================================================
@@ -133,7 +133,7 @@ static void inicializar_sistema(int argc, char* argv[]) {
         }
     }
     
-    if (argc < 10) {
+    if (argc < 9) {
         mostrar_uso(argv[0]);
         exit(1);
     }
@@ -145,16 +145,18 @@ static void inicializar_sistema(int argc, char* argv[]) {
         exit(1);
     }
 
-    // Leer configuración desde argumentos
-    sistema->config.num_dispensadores = atoi(argv[1]);
-    sistema->config.num_celdas = atoi(argv[2]);
-    sistema->config.num_sets = atoi(argv[3]);
-    sistema->config.piezas_por_tipo[0] = atoi(argv[4]);
-    sistema->config.piezas_por_tipo[1] = atoi(argv[5]);
-    sistema->config.piezas_por_tipo[2] = atoi(argv[6]);
-    sistema->config.piezas_por_tipo[3] = atoi(argv[7]);
-    sistema->config.velocidad_banda = atoi(argv[8]);
-    sistema->config.longitud_banda = atoi(argv[9]);
+    // Número de dispensadores fijo en 3
+    sistema->config.num_dispensadores = 3;
+    
+    // Leer configuración desde argumentos (sin dispensadores)
+    sistema->config.num_celdas = atoi(argv[1]);
+    sistema->config.num_sets = atoi(argv[2]);
+    sistema->config.piezas_por_tipo[0] = atoi(argv[3]);
+    sistema->config.piezas_por_tipo[1] = atoi(argv[4]);
+    sistema->config.piezas_por_tipo[2] = atoi(argv[5]);
+    sistema->config.piezas_por_tipo[3] = atoi(argv[6]);
+    sistema->config.velocidad_banda = atoi(argv[7]);
+    sistema->config.longitud_banda = atoi(argv[8]);
     
     // Valores por defecto para parámetros opcionales
     sistema->config.delta_t1_max = 2000;  // máx 2 segundos para operador
@@ -167,12 +169,16 @@ static void inicializar_sistema(int argc, char* argv[]) {
         fprintf(stderr, "Advertencia: Máximo %d celdas, ajustando...\n", MAX_CELDAS);
         sistema->config.num_celdas = MAX_CELDAS;
     }
+    if (sistema->config.num_celdas <= 0) {
+        fprintf(stderr, "Error: Número de celdas debe ser > 0\n");
+        exit(1);
+    }
     if (sistema->config.longitud_banda > MAX_POSICIONES) {
         fprintf(stderr, "Advertencia: Máximo %d posiciones, ajustando...\n", MAX_POSICIONES);
         sistema->config.longitud_banda = MAX_POSICIONES;
     }
-    if (sistema->config.num_dispensadores <= 0 || sistema->config.num_sets <= 0) {
-        fprintf(stderr, "Error: Dispensadores y sets deben ser > 0\n");
+    if (sistema->config.num_sets <= 0) {
+        fprintf(stderr, "Error: Número de sets debe ser > 0\n");
         exit(1);
     }
 

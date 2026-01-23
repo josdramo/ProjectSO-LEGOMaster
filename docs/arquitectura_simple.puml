@@ -1,0 +1,87 @@
+@startuml LEGO_Master_Simple
+
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultTextAlignment center
+
+title **LEGO Master - Arquitectura Simplificada**
+
+' ============================================
+' COMPONENTES
+' ============================================
+
+package "Entrada" #E8F5E9 {
+    [Dispensadores\n(3 fijos)] as D
+}
+
+package "Transporte" #E3F2FD {
+    [Banda\nTransportadora] as B
+}
+
+package "Procesamiento" #FFF8E1 {
+    [Celda 1\n(4 brazos)] as C1
+    [Celda 2\n(4 brazos)] as C2
+    [Celda ...\n(4 brazos)] as CN
+}
+
+package "Verificación" #F3E5F5 {
+    [Operador\nHumano] as O
+}
+
+package "Salida" #FFEBEE {
+    [Cajas OK] as OK
+    [Cajas FAIL] as FAIL
+    [Tacho] as T
+}
+
+package "Gestión" #E0F7FA {
+    [Gestor\nDinámico] as G
+}
+
+' ============================================
+' CONEXIONES
+' ============================================
+
+D --> B : piezas
+B --> C1 : retira
+B --> C2 : retira  
+B --> CN : retira
+B --> T : sobrantes
+
+C1 --> O : SET completo
+C2 --> O
+CN --> O
+
+O --> OK : aprobado
+O --> FAIL : rechazado
+
+G ..> C1 : activa/desactiva
+G ..> C2 : monitorea
+G ..> CN : optimiza
+
+' ============================================
+' NOTAS
+' ============================================
+
+note right of D
+  • Probabilidad 80%
+  • Tipos: A, B, C, D
+end note
+
+note right of B
+  • N posiciones
+  • Velocidad: v pasos/seg
+end note
+
+note bottom of C1
+  **Sincronización:**
+  • Máx 2 retirando
+  • Solo 1 colocando
+end note
+
+note right of O
+  • Tiempo: 0 a Δt₁
+  • Automático
+end note
+
+@enduml

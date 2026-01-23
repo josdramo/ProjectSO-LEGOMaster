@@ -1,0 +1,135 @@
+@startuml LEGO_Master_Componentes
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam componentBackgroundColor #E8F4FD
+skinparam packageBackgroundColor #FFF8E1
+skinparam nodeBackgroundColor #E8F5E9
+skinparam databaseBackgroundColor #FCE4EC
+
+title **LEGO Master - Diagrama de Componentes**
+
+' ============================================
+' CAPA DE CONTROL PRINCIPAL
+' ============================================
+
+package "Control Principal" as MAIN #FFFDE7 {
+    component [lego_master.c\n──────────\n• main()\n• Parsea argumentos\n• Crea todos los hilos\n• Espera terminación\n• Muestra estadísticas] as LM
+}
+
+' ============================================
+' CAPA DE HILOS (CONCURRENCIA)
+' ============================================
+
+package "Hilos del Sistema" as THREADS #E3F2FD {
+    
+    component [thread_banda\n──────────\n• Mueve piezas cada 1/v seg\n• Envía sobrantes al tacho] as TB
+    
+    component [thread_dispensador\n──────────\n• 3 dispensadores fijos\n• 80% probabilidad/ciclo\n• Balanceo cada Y piezas] as TD
+    
+    component [thread_brazo x4\n──────────\n• Retira pieza de banda\n• Coloca en caja\n• Usa buffer temporal] as TBR
+    
+    component [thread_operador\n──────────\n• Verifica cajas completas\n• Decide OK/FAIL\n• Tiempo: 0 a Δt₁] as TO
+    
+    component [thread_gestor_celdas\n──────────\n• Monitorea actividad\n• Activa/desactiva celdas\n• Optimiza recursos] as TG
+}
+
+' ============================================
+' CAPA DE DATOS COMPARTIDOS
+' ============================================
+
+package "Estructuras Compartidas" as DATA #FFEBEE {
+    
+    database "SistemaLego\n(struct global)" as SL {
+    }
+    
+    node "BandaTransportadora\n──────────\n• posiciones[N]\n• velocidad\n• longitud" as BANDA
+    
+    node "CeldaEmpaquetado[4]\n──────────\n• brazos[4]\n• caja\n• buffer[20]\n• posicion_banda" as CELDA
+    
+    node "Estadisticas\n──────────\n• piezas_dispensadas\n• piezas_tacho[4]\n• cajas_ok/fail" as STATS
+}
+
+' ============================================
+' CAPA DE SINCRONIZACIÓN
+' ============================================
+
+package "Mecanismos de Sincronización" as SYNC #E8F5E9 {
+    
+    component [mutex_posicion[N]\n──────────\nAcceso exclusivo\na cada posición] as MP
+    
+    component [sem_brazos_retirando\n──────────\nMáx 2 brazos\nretirando a la vez] as SBR
+    
+    component [sem_acceso_caja\n──────────\nSolo 1 brazo\ncoloca a la vez] as SAC
+    
+    component [mutex_sets\n──────────\nControl de SETs\nen proceso] as MS
+    
+    component [mutex_celdas_dinamicas\n──────────\nActivar/desactivar\nceldas] as MCD
+}
+
+' ============================================
+' CAPA DE UTILIDADES
+' ============================================
+
+package "Utilidades" as UTILS #F3E5F5 {
+    component [utils.c\n──────────\n• nombre_tipo_pieza()\n• imprimir_estadisticas()\n• imprimir_estado_banda()] as UT
+}
+
+' ============================================
+' RELACIONES PRINCIPALES
+' ============================================
+
+' Control principal crea hilos
+LM --> TB : crea
+LM --> TD : crea
+LM --> TBR : crea (4 por celda)
+LM --> TO : crea
+LM --> TG : crea
+
+' Hilos acceden a datos compartidos
+TB --> BANDA : mueve piezas
+TD --> BANDA : agrega piezas
+TBR --> BANDA : retira piezas
+TBR --> CELDA : coloca en caja
+TO --> CELDA : verifica caja
+TG --> CELDA : activa/desactiva
+
+' Todos actualizan estadísticas
+TB --> STATS : tacho++
+TD --> STATS : dispensadas++
+TBR --> STATS : por_brazo++
+TO --> STATS : ok++/fail++
+
+' Sincronización
+TB ..> MP : usa
+TD ..> MP : usa
+TBR ..> MP : usa
+TBR ..> SBR : usa
+TBR ..> SAC : usa
+TO ..> MS : usa
+TG ..> MCD : usa
+
+' Utilidades
+LM --> UT : muestra resumen
+
+' ============================================
+' NOTAS EXPLICATIVAS
+' ============================================
+
+note bottom of THREADS
+  **Flujo de Ejecución:**
+  1. Dispensadores sueltan piezas
+  2. Banda mueve piezas → 
+  3. Brazos retiran y colocan
+  4. Operador verifica SETs
+  5. Gestor optimiza celdas
+end note
+
+note right of SYNC
+  **Restricciones:**
+  • Máx 2 brazos retirando
+  • Solo 1 colocando en caja
+  • Mutex protege cada recurso
+end note
+
+@enduml

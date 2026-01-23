@@ -1,0 +1,90 @@
+@startuml LEGO_Master_Flujo
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+
+title **LEGO Master - Flujo de Datos**
+
+' Estilo simplificado
+skinparam rectangle {
+    BackgroundColor #E3F2FD
+    BorderColor #1976D2
+}
+
+skinparam hexagon {
+    BackgroundColor #FFF8E1
+    BorderColor #F57C00
+}
+
+skinparam database {
+    BackgroundColor #FCE4EC
+    BorderColor #C2185B
+}
+
+' ============================================
+' COMPONENTES PRINCIPALES
+' ============================================
+
+rectangle "**DISPENSADORES**\n(3 fijos)" as DISP #C8E6C9 {
+}
+
+rectangle "**BANDA TRANSPORTADORA**\n[Posición 0] → [Posición N-1]" as BANDA #BBDEFB {
+}
+
+rectangle "**CELDA 1**\nPosición: x₁\n4 brazos" as C1 #FFF9C4 {
+}
+
+rectangle "**CELDA 2**\nPosición: x₂\n4 brazos" as C2 #FFF9C4 {
+}
+
+rectangle "**CELDA 3**\nPosición: x₃\n4 brazos" as C3 #FFF9C4 {
+}
+
+rectangle "**CELDA 4**\nPosición: x₄\n4 brazos" as C4 #FFF9C4 {
+}
+
+database "**TACHO**\nPiezas\nsobrantes" as TACHO #FFCDD2
+
+hexagon "**OPERADOR**\nOK / FAIL" as OP #E1BEE7
+
+rectangle "**CAJAS OK**" as OK #A5D6A7
+
+rectangle "**CAJAS FAIL**" as FAIL #EF9A9A
+
+' ============================================
+' FLUJO DE PIEZAS
+' ============================================
+
+DISP -down-> BANDA : "Piezas tipo\nA, B, C, D"
+
+BANDA -right-> C1 : "brazos\nretiran"
+BANDA -right-> C2 : "brazos\nretiran"
+BANDA -right-> C3 : "brazos\nretiran"
+BANDA -right-> C4 : "brazos\nretiran"
+
+BANDA -down-> TACHO : "piezas no\nrecogidas"
+
+C1 -down-> OP : "SET\ncompleto"
+C2 -down-> OP
+C3 -down-> OP
+C4 -down-> OP
+
+OP -left-> OK : "verificado\ncorrecto"
+OP -right-> FAIL : "verificado\nincorrecto"
+
+' ============================================
+' LEYENDA
+' ============================================
+
+legend bottom
+  |= Color |= Componente |
+  | <#C8E6C9> | Entrada (Dispensadores) |
+  | <#BBDEFB> | Transporte (Banda) |
+  | <#FFF9C4> | Procesamiento (Celdas) |
+  | <#E1BEE7> | Verificación (Operador) |
+  | <#A5D6A7> | Salida OK |
+  | <#EF9A9A> | Salida FAIL |
+  | <#FFCDD2> | Desperdicio (Tacho) |
+endlegend
+
+@enduml

@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdbool.h>
+#include <time.h>
 
 // Configuración del sistema
 #define MAX_TIPOS_PIEZA     4       // Tipos de piezas: A, B, C, D

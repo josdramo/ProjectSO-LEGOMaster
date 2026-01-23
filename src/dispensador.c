@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <time.h>
 
 // Variables externas
 extern SistemaLego *sistema;

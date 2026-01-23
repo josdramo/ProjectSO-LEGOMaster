@@ -23,6 +23,9 @@
 #include "banda.h"
 #include "dispensador.h"
 #include "celda.h"
+#include "brazo.h"
+#include "operador.h"
+#include "gestor_celdas.h"
 
 // Sistema global (accesible desde otros módulos)
 SistemaLego *sistema = NULL;

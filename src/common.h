@@ -140,6 +140,8 @@ typedef struct {
     int cajas_fail;
     int piezas_por_brazo[MAX_CELDAS][BRAZOS_POR_CELDA];
     pthread_mutex_t mutex;
+    // Métricas para gestión dinámica
+    int piezas_tacho_ultimo_ciclo;   // Piezas al tacho desde última revisión
 } Estadisticas;
 
 // Estructura principal del sistema compartido
@@ -156,6 +158,11 @@ typedef struct {
     pthread_mutex_t mutex_sets;      // Mutex para control de sets
     // Control de turno de celdas
     int celda_activa;                // Índice de la celda que tiene el turno (-1 = ninguna)
+    // Control dinámico de celdas
+    bool celdas_habilitadas[MAX_CELDAS];  // Qué celdas están activas
+    int num_celdas_activas;               // Contador de celdas activas
+    pthread_mutex_t mutex_celdas_dinamicas; // Mutex para modificar celdas
+    int ciclos_inactiva[MAX_CELDAS];      // Ciclos sin actividad por celda
 } SistemaLego;
 
 // Funciones de utilidad

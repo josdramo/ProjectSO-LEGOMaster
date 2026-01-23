@@ -31,6 +31,7 @@ SistemaLego *sistema = NULL;
 static pthread_t hilo_banda;
 static pthread_t hilo_dispensadores;
 static pthread_t hilos_brazos[MAX_CELDAS][BRAZOS_POR_CELDA];
+static pthread_t hilo_gestor_celdas;
 
 // Prototipos locales
 static void inicializar_sistema(int argc, char* argv[]);
@@ -215,6 +216,15 @@ static void inicializar_sistema(int argc, char* argv[]) {
     
     // Inicializar turno de celdas (la primera celda empieza)
     sistema->celda_activa = 0;
+    
+    // Inicializar gestión dinámica de celdas
+    pthread_mutex_init(&sistema->mutex_celdas_dinamicas, NULL);
+    sistema->num_celdas_activas = sistema->config.num_celdas;
+    sistema->stats.piezas_tacho_ultimo_ciclo = 0;
+    for (int c = 0; c < MAX_CELDAS; c++) {
+        sistema->celdas_habilitadas[c] = (c < sistema->config.num_celdas);
+        sistema->ciclos_inactiva[c] = 0;
+    }
 
     // Mostrar configuración
     int total_piezas_set = sistema->config.piezas_por_tipo[0] +
@@ -259,6 +269,7 @@ static void limpiar_recursos(void) {
         }
         
         pthread_mutex_destroy(&sistema->stats.mutex);
+        pthread_mutex_destroy(&sistema->mutex_celdas_dinamicas);
         free(sistema);
         sistema = NULL;
     }
@@ -325,6 +336,12 @@ int main(int argc, char *argv[]) {
         sistema->terminar = true;
     }
     
+    // Crear hilo gestor de celdas dinámicas
+    if (pthread_create(&hilo_gestor_celdas, NULL, thread_gestor_celdas, NULL) != 0) {
+        perror("Error creando hilo gestor de celdas");
+        // No es crítico, continuar sin gestor dinámico
+    }
+    
     // Esperar a que termine el dispensador (controla el fin de la simulación)
     pthread_join(hilo_dispensadores, NULL);
     
@@ -342,6 +359,9 @@ int main(int argc, char *argv[]) {
             pthread_join(hilos_brazos[c][b], NULL);
         }
     }
+    
+    // Esperar al hilo gestor
+    pthread_join(hilo_gestor_celdas, NULL);
     
     // Contabilizar piezas restantes en buffers de celdas (van al tacho)
     for (int c = 0; c < sistema->config.num_celdas; c++) {

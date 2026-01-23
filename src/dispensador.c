@@ -36,10 +36,7 @@ void* thread_dispensador(void* arg) {
         total_piezas += piezas_restantes[t];
     }
     
-    printf("[DISPENSADORES] Iniciados - total piezas a dispensar: %d\n", total_piezas);
-    printf("[DISPENSADORES] Por tipo: A=%d, B=%d, C=%d, D=%d\n",
-           piezas_restantes[0], piezas_restantes[1], 
-           piezas_restantes[2], piezas_restantes[3]);
+    // Mensajes de inicio eliminados para reducir ruido
     
     int intervalo_us = 1000000 / sistema->banda.velocidad / 2;
     
@@ -50,8 +47,10 @@ void* thread_dispensador(void* arg) {
         pthread_mutex_lock(&inicio->mutex);
         
         // Cada dispensador puede soltar una pieza (o no)
+        // Límite por ciclo = número de dispensadores (no más piezas de las que pueden dispensar)
+        int limite_piezas_ciclo = sistema->config.num_dispensadores;
         for (int d = 0; d < sistema->config.num_dispensadores && total_piezas > 0; d++) {
-            if (inicio->num_piezas >= MAX_PIEZAS_POS) break;
+            if (inicio->num_piezas >= limite_piezas_ciclo) break;
             
             // Decidir aleatoriamente si dispensar y qué tipo
             if (rand() % 5 < 4) {  // 80% probabilidad de dispensar
@@ -95,8 +94,7 @@ void* thread_dispensador(void* arg) {
                     if (brazo->estado == BRAZO_IDLE) {
                         brazo->estado = BRAZO_SUSPENDIDO;
                         brazo->tiempo_suspension = time(NULL);
-                        printf("[CELDA %d] Brazo %d suspendido por balanceo (piezas: %d)\n",
-                               c+1, brazo_max+1, brazo->piezas_movidas);
+                        // Mensaje de balanceo eliminado para reducir ruido en consola
                     }
                     pthread_mutex_unlock(&brazo->mutex);
                 }
@@ -104,16 +102,14 @@ void* thread_dispensador(void* arg) {
         }
     }
     
-    printf("[DISPENSADORES] Terminados - todas las piezas dispensadas (%d)\n",
+    printf("[SISTEMA] Todas las piezas dispensadas (%d). Esperando que la banda se vacíe...\n",
            sistema->stats.total_piezas_dispensadas);
     
     // Esperar a que la banda se vacíe
     int tiempo_espera = (sistema->banda.longitud / sistema->banda.velocidad) + 3;
-    printf("[DISPENSADORES] Esperando %d segundos para que la banda se vacíe...\n", tiempo_espera);
     sleep(tiempo_espera);
     
     // Esperar a que todos los SETs sean confirmados por el operador (con timeout)
-    printf("[DISPENSADORES] Esperando confirmación de SETs pendientes...\n");
     
     // Calcular timeout basado en el número de SETs y tiempo máximo del operador
     int timeout_confirmacion = sistema->config.num_sets * 
@@ -130,7 +126,7 @@ void* thread_dispensador(void* arg) {
         
         // Si ya se completaron todos los SETs esperados, terminar
         if (completados >= sistema->config.num_sets) {
-            printf("[DISPENSADORES] Todos los SETs confirmados (%d/%d). Terminando simulación.\n",
+            printf("\n[SISTEMA] ✓ Todos los SETs completados (%d/%d)\n",
                    completados, sistema->config.num_sets);
             break;
         }
@@ -180,19 +176,15 @@ void* thread_dispensador(void* arg) {
         // NOTA: Aunque haya SETs en proceso, si no hay piezas suficientes,
         // las celdas deberían liberar sus piezas para que otras las usen
         if (piezas_disponibles < piezas_necesarias && en_proceso == 0) {
-            printf("[DISPENSADORES] No hay suficientes piezas para más SETs "
-                   "(disponibles: %d, necesarias: %d). Terminando con %d/%d completados.\n",
-                   piezas_disponibles, piezas_necesarias, completados, sistema->config.num_sets);
+            printf("\n[SISTEMA] ✗ Piezas insuficientes. Completados: %d/%d\n",
+                   completados, sistema->config.num_sets);
             break;
         }
         
         // Forzar liberación de piezas si hay celdas estancadas con SETs en proceso
         // pero sin progreso durante mucho tiempo
         if (en_proceso > 0 && ciclos_sin_progreso > 10) {  // 5 segundos sin progreso con SETs en proceso
-            printf("[DISPENSADORES] Detectado estancamiento con %d SETs en proceso. Verificando celdas...\n", 
-                   en_proceso);
-            
-            // Buscar celdas estancadas y forzar liberación de piezas
+            // Buscar celdas estancadas y forzar liberación de piezas (silencioso)
             for (int c = 0; c < sistema->config.num_celdas; c++) {
                 CeldaEmpaquetado *celda = &sistema->celdas[c];
                 
@@ -261,8 +253,6 @@ void* thread_dispensador(void* arg) {
                     // Solo forzar liberación si NO puede completar y NO es la última celda
                     bool es_ultima_celda = (c == sistema->config.num_celdas - 1);
                     if (!puede_completar && !es_ultima_celda && piezas_celda > 0) {
-                        printf("[DISPENSADORES] Celda %d no puede completar (tiene %d piezas, faltan %d). Forzando liberación.\n",
-                               c + 1, piezas_celda, faltan_celda);
                         devolver_piezas_a_banda(celda);
                     }
                 }
@@ -285,9 +275,8 @@ void* thread_dispensador(void* arg) {
         
         // Si no hay progreso después de varios ciclos Y no hay celda esperando al operador
         if (ciclos_sin_progreso > 20 && !hay_celda_esperando_operador) {  // 10 segundos sin progreso
-            printf("[DISPENSADORES] Sin progreso por %d segundos. "
-                   "Terminando con %d/%d completados.\n",
-                   ciclos_sin_progreso / 2, completados, sistema->config.num_sets);
+            printf("\n[SISTEMA] Sin progreso. Completados: %d/%d\n",
+                   completados, sistema->config.num_sets);
             break;
         }
         
@@ -301,7 +290,7 @@ void* thread_dispensador(void* arg) {
     }
     
     if (tiempo_esperado >= timeout_confirmacion) {
-        printf("[DISPENSADORES] Timeout esperando confirmaciones. Terminando simulación.\n");
+        printf("\n[SISTEMA] Timeout. Terminando simulación.\n");
     }
     
     sistema->terminar = true;

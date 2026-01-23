@@ -153,13 +153,12 @@ static void procesar_respuesta_operador(int celda_id, const char* respuesta) {
         pthread_mutex_lock(&sistema->stats.mutex);
         sistema->stats.cajas_ok++;
         celda->cajas_completadas_ok++;
-        printf("[CELDA %d] ✓ Operador confirmó: OK - Caja #%d completada correctamente\n", 
-               celda_id + 1, sistema->stats.cajas_ok);
         pthread_mutex_unlock(&sistema->stats.mutex);
         
         pthread_mutex_lock(&sistema->mutex_sets);
         sistema->sets_completados_total++;
-        printf("[SISTEMA] SETs completados: %d / %d\n", 
+        printf("[CELDA %d] ✓ SET #%d OK (%d/%d completados)\n", 
+               celda_id + 1, sistema->sets_completados_total,
                sistema->sets_completados_total, sistema->config.num_sets);
         pthread_mutex_unlock(&sistema->mutex_sets);
         
@@ -167,8 +166,7 @@ static void procesar_respuesta_operador(int celda_id, const char* respuesta) {
         pthread_mutex_lock(&sistema->stats.mutex);
         sistema->stats.cajas_fail++;
         celda->cajas_completadas_fail++;
-        printf("[CELDA %d] ✗ Operador confirmó: FAIL - Caja marcada como incorrecta\n", 
-               celda_id + 1);
+        printf("[CELDA %d] ✗ SET marcado FAIL\n", celda_id + 1);
         pthread_mutex_unlock(&sistema->stats.mutex);
     }
     
@@ -193,14 +191,14 @@ static void procesar_respuesta_operador(int celda_id, const char* respuesta) {
     }
     pthread_mutex_unlock(&sistema->mutex_sets);
     
-    printf("[CELDA %d] Caja retirada. Celda reactivada con caja vacía.\n\n", celda_id + 1);
+    // Mensaje de caja retirada eliminado para reducir ruido
 }
 
 // Hilo dedicado del operador - AUTOMÁTICO con tiempo aleatorio
 static void* thread_operador(void* arg) {
     (void)arg;
     
-    printf("[OPERADOR] Hilo del operador automático iniciado\n");
+    // Mensaje de inicio eliminado para reducir ruido
     
     while (!sistema->terminar) {
         // Esperar a que haya celdas en cola
@@ -243,33 +241,18 @@ static void* thread_operador(void* arg) {
         
         CeldaEmpaquetado *celda = &sistema->celdas[celda_id];
         
-        // Mostrar contenido de la caja
-        printf("\n");
-        printf("╔═══════════════════════════════════════════════════════════════╗\n");
-        printf("║          🔔 CELDA %d - CAJA LISTA PARA REVISIÓN              ║\n", celda_id + 1);
-        printf("╠═══════════════════════════════════════════════════════════════╣\n");
-        printf("║  Contenido de la caja:                                        ║\n");
-        
+        // Verificar contenido de la caja
         pthread_mutex_lock(&celda->caja.mutex);
         bool caja_correcta = true;
         for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
-            printf("║    Tipo %s: %d / %d piezas                                    ║\n",
-                   nombre_tipo_pieza(t + 1),
-                   celda->caja.piezas_por_tipo[t],
-                   celda->caja.piezas_necesarias[t]);
-            // Verificar si la cantidad es correcta
             if (celda->caja.piezas_por_tipo[t] != celda->caja.piezas_necesarias[t]) {
                 caja_correcta = false;
             }
         }
         pthread_mutex_unlock(&celda->caja.mutex);
         
-        printf("╚═══════════════════════════════════════════════════════════════╝\n");
-        
         // Simular tiempo del operador revisando (entre 0 y delta_t1_max ms)
         int tiempo_revision_ms = rand() % (sistema->config.delta_t1_max + 1);
-        printf("[OPERADOR] Revisando caja de Celda %d... (tiempo: %d ms)\n", 
-               celda_id + 1, tiempo_revision_ms);
         usleep(tiempo_revision_ms * 1000);
         
         // El operador determina OK o FAIL basándose en si la caja está correcta
@@ -278,7 +261,7 @@ static void* thread_operador(void* arg) {
         procesar_respuesta_operador(celda_id, resultado);
     }
     
-    printf("[OPERADOR] Hilo del operador terminado\n");
+    // Mensaje de terminación eliminado para reducir ruido
     return NULL;
 }
 
@@ -518,9 +501,6 @@ void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
     celda->devolviendo_piezas = true;
     pthread_mutex_unlock(&celda->mutex);
     
-    printf("[CELDA %d] ⚠ Devolviendo piezas a la banda (SET incompleto, ayudando a otras celdas)\n", 
-           celda->id + 1);
-    
     // Calcular posición donde devolver las piezas
     // Las piezas deben ir DESPUÉS de esta celda (posición + 1) para que las celdas posteriores las tomen
     int posicion_devolucion = celda->posicion_banda + 1;
@@ -528,13 +508,7 @@ void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
     // Si esta es la última celda, las piezas van al final (tacho)
     bool es_ultima_celda = (celda->id == sistema->config.num_celdas - 1);
     if (es_ultima_celda) {
-        // Devolver al final de la banda (irán al tacho)
         posicion_devolucion = sistema->banda.longitud - 1;
-        printf("[CELDA %d] Es la última celda, piezas irán al tacho\n", celda->id + 1);
-    } else {
-        // Devolver justo después de esta celda
-        printf("[CELDA %d] Devolviendo piezas a posición %d (después de esta celda)\n", 
-               celda->id + 1, posicion_devolucion);
     }
     
     // Asegurar que la posición es válida
@@ -544,22 +518,26 @@ void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
     
     PosicionBanda *pos = &sistema->banda.posiciones[posicion_devolucion];
     
+    // Contar piezas a devolver
+    int total_devolver = 0;
+    
     // Devolver piezas de la caja
-    // IMPORTANTE: Primero el semáforo, luego el mutex (mismo orden que en thread_brazo)
     sem_wait(&celda->caja.sem_acceso);
     pthread_mutex_lock(&celda->caja.mutex);
+    
+    // Límite dinámico basado en número de dispensadores
+    int limite_piezas = sistema->config.num_dispensadores;
     
     for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
         while (celda->caja.piezas_por_tipo[t] > 0) {
             pthread_mutex_lock(&pos->mutex);
-            if (pos->num_piezas < MAX_PIEZAS_POS) {
+            if (pos->num_piezas < limite_piezas) {
                 Pieza p;
                 p.tipo = t + 1;
                 p.id_unico = -1;  // Marcamos como pieza devuelta
                 pos->piezas[pos->num_piezas++] = p;
                 celda->caja.piezas_por_tipo[t]--;
-                printf("[CELDA %d] Devolvió pieza tipo %s a la banda (pos %d)\n", 
-                       celda->id + 1, nombre_tipo_pieza(t + 1), posicion_devolucion);
+                total_devolver++;
             }
             pthread_mutex_unlock(&pos->mutex);
             
@@ -578,10 +556,9 @@ void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
     while (celda->buffer_count > 0) {
         Pieza p = celda->buffer[--celda->buffer_count];
         pthread_mutex_lock(&pos->mutex);
-        if (pos->num_piezas < MAX_PIEZAS_POS) {
+        if (pos->num_piezas < limite_piezas) {
             pos->piezas[pos->num_piezas++] = p;
-            printf("[CELDA %d] Devolvió pieza tipo %s (buffer) a la banda (pos %d)\n", 
-                   celda->id + 1, nombre_tipo_pieza(p.tipo), posicion_devolucion);
+            total_devolver++;
         }
         pthread_mutex_unlock(&pos->mutex);
     }
@@ -601,7 +578,8 @@ void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
     }
     pthread_mutex_unlock(&sistema->mutex_sets);
     
-    printf("[CELDA %d] Piezas devueltas. Celda lista para nuevo SET.\n", celda->id + 1);
+    printf("[CELDA %d] Devolvió %d piezas a la banda (pos %d)\n", 
+           celda->id + 1, total_devolver, posicion_devolucion);
 }
 
 // Agregar pieza al buffer de la celda
@@ -666,15 +644,26 @@ void* thread_brazo(void* arg) {
     CeldaEmpaquetado *celda = &sistema->celdas[c];
     BrazoRobotico *brazo = &celda->brazos[b];
     
-    printf("[CELDA %d][BRAZO %d] Iniciado\n", c+1, b+1);
+    // Mensaje de inicio eliminado para reducir ruido
     
     while (!sistema->terminar) {
+        // Verificar si la celda está habilitada
+        pthread_mutex_lock(&sistema->mutex_celdas_dinamicas);
+        bool celda_activa = sistema->celdas_habilitadas[c];
+        pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+        
+        if (!celda_activa) {
+            // Celda desactivada, esperar
+            usleep(100000);
+            continue;
+        }
+        
         // Verificar si está suspendido
         pthread_mutex_lock(&brazo->mutex);
         if (brazo->estado == BRAZO_SUSPENDIDO) {
             if (time(NULL) - brazo->tiempo_suspension >= sistema->config.delta_t2 / 1000) {
                 brazo->estado = BRAZO_IDLE;
-                printf("[CELDA %d][BRAZO %d] Reactivado\n", c+1, b+1);
+                // Mensaje de reactivación eliminado para reducir ruido
             } else {
                 pthread_mutex_unlock(&brazo->mutex);
                 usleep(100000);
@@ -757,8 +746,8 @@ void* thread_brazo(void* arg) {
                             celda->trabajando_en_set = true;
                             sistema->sets_en_proceso++;
                             ya_trabajando = true;
-                            printf("[SISTEMA] Celda %d reservó SET. En proceso: %d, Completados: %d\n", 
-                                   c+1, sistema->sets_en_proceso, sistema->sets_completados_total);
+                            printf("[CELDA %d] Inició SET #%d\n", 
+                                   c+1, sistema->sets_completados_total + sistema->sets_en_proceso);
                         }
                         
                         pthread_mutex_unlock(&celda->mutex);
@@ -817,8 +806,7 @@ void* thread_brazo(void* arg) {
                             
                             if (verificar_caja_completa(&celda->caja)) {
                                 celda->caja.completa = true;
-                                printf("[CELDA %d][BRAZO %d] ★ ¡SET COMPLETO! Notificando operador...\n",
-                                       c+1, b+1);
+                                printf("[CELDA %d] ★ SET COMPLETO - Esperando revisión\n", c+1);
                                 
                                 pthread_mutex_unlock(&celda->caja.mutex);
                                 sem_post(&celda->caja.sem_acceso);
@@ -887,8 +875,7 @@ void* thread_brazo(void* arg) {
                         
                         if (verificar_caja_completa(&celda->caja)) {
                             celda->caja.completa = true;
-                            printf("[CELDA %d][BRAZO %d] ★ ¡SET COMPLETO! Notificando operador...\n",
-                                   c+1, b+1);
+                            printf("[CELDA %d] ★ SET COMPLETO - Esperando revisión\n", c+1);
                             
                             pthread_mutex_unlock(&celda->caja.mutex);
                             sem_post(&celda->caja.sem_acceso);
@@ -982,13 +969,21 @@ void* thread_brazo(void* arg) {
                 // Si no hay suficientes piezas para completar el SET y NO soy la última celda
                 bool es_ultima_celda = (c == sistema->config.num_celdas - 1);
                 
-                if (!puedo_completar && !es_ultima_celda) {
-                    int piezas_disponibles_total = 0;
-                    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
-                        piezas_disponibles_total += piezas_disponibles_por_tipo[t];
+                // La última celda también puede liberar si no hay NINGUNA pieza disponible en toda la banda
+                bool banda_vacia = true;
+                for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                    if (piezas_disponibles_por_tipo[t] > 0) {
+                        banda_vacia = false;
+                        break;
                     }
-                    printf("[CELDA %d] No hay suficientes piezas (disponibles: %d, faltan: %d). Liberando para siguiente celda.\n",
-                           c+1, piezas_disponibles_total, piezas_faltan_total);
+                }
+                
+                // Liberar si:
+                // 1. No puedo completar Y no soy la última celda, O
+                // 2. No puedo completar Y soy la última celda Y la banda está vacía (no hay esperanza)
+                bool debo_liberar = !puedo_completar && (!es_ultima_celda || banda_vacia);
+                
+                if (debo_liberar) {
                     devolver_piezas_a_banda(celda);
                     ya_trabajando = false;
                 } else {
@@ -1003,6 +998,268 @@ void* thread_brazo(void* arg) {
         usleep(10000);
     }
     
-    printf("[CELDA %d][BRAZO %d] Terminado\n", c+1, b+1);
+    // Mensaje de terminación eliminado para reducir ruido
+    return NULL;
+}
+
+// ============= GESTIÓN DINÁMICA DE CELDAS =============
+
+// Verifica si una celda puede ser quitada de forma segura
+bool celda_puede_quitarse(CeldaEmpaquetado *celda) {
+    pthread_mutex_lock(&celda->mutex);
+    
+    // No quitar si está esperando al operador
+    if (celda->estado == CELDA_ESPERANDO_OP) {
+        pthread_mutex_unlock(&celda->mutex);
+        return false;
+    }
+    
+    // No quitar si está trabajando en un SET
+    if (celda->trabajando_en_set) {
+        pthread_mutex_unlock(&celda->mutex);
+        return false;
+    }
+    
+    // No quitar si está devolviendo piezas
+    if (celda->devolviendo_piezas) {
+        pthread_mutex_unlock(&celda->mutex);
+        return false;
+    }
+    
+    pthread_mutex_unlock(&celda->mutex);
+    
+    // No quitar si tiene piezas en la caja
+    pthread_mutex_lock(&celda->caja.mutex);
+    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+        if (celda->caja.piezas_por_tipo[t] > 0) {
+            pthread_mutex_unlock(&celda->caja.mutex);
+            return false;
+        }
+    }
+    pthread_mutex_unlock(&celda->caja.mutex);
+    
+    // No quitar si tiene piezas en el buffer
+    pthread_mutex_lock(&celda->buffer_mutex);
+    if (celda->buffer_count > 0) {
+        pthread_mutex_unlock(&celda->buffer_mutex);
+        return false;
+    }
+    pthread_mutex_unlock(&celda->buffer_mutex);
+    
+    // Verificar que ningún brazo esté ocupado
+    for (int b = 0; b < BRAZOS_POR_CELDA; b++) {
+        pthread_mutex_lock(&celda->brazos[b].mutex);
+        if (celda->brazos[b].estado == BRAZO_RETIRANDO || 
+            celda->brazos[b].estado == BRAZO_COLOCANDO) {
+            pthread_mutex_unlock(&celda->brazos[b].mutex);
+            return false;
+        }
+        pthread_mutex_unlock(&celda->brazos[b].mutex);
+    }
+    
+    return true;
+}
+
+// Quita una celda del sistema (la desactiva)
+bool quitar_celda_dinamica(int celda_id) {
+    if (celda_id < 0 || celda_id >= sistema->config.num_celdas) {
+        return false;
+    }
+    
+    pthread_mutex_lock(&sistema->mutex_celdas_dinamicas);
+    
+    // Verificar si ya está deshabilitada
+    if (!sistema->celdas_habilitadas[celda_id]) {
+        pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+        return false;
+    }
+    
+    CeldaEmpaquetado *celda = &sistema->celdas[celda_id];
+    
+    // Verificar si puede quitarse
+    if (!celda_puede_quitarse(celda)) {
+        pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+        return false;
+    }
+    
+    // Desactivar la celda
+    pthread_mutex_lock(&celda->mutex);
+    celda->estado = CELDA_INACTIVA;
+    pthread_mutex_unlock(&celda->mutex);
+    
+    sistema->celdas_habilitadas[celda_id] = false;
+    sistema->num_celdas_activas--;
+    
+    printf("[GESTOR] Celda %d desactivada (activas: %d)\n", celda_id + 1, sistema->num_celdas_activas);
+    
+    pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+    return true;
+}
+
+// Agrega/reactiva una celda en el sistema
+bool agregar_celda_dinamica(int celda_id) {
+    if (celda_id < 0 || celda_id >= MAX_CELDAS) {
+        return false;
+    }
+    
+    pthread_mutex_lock(&sistema->mutex_celdas_dinamicas);
+    
+    // Verificar si ya está habilitada
+    if (sistema->celdas_habilitadas[celda_id]) {
+        pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+        return false;
+    }
+    
+    // Verificar si está dentro del rango configurado
+    if (celda_id >= sistema->config.num_celdas) {
+        pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+        return false;
+    }
+    
+    CeldaEmpaquetado *celda = &sistema->celdas[celda_id];
+    
+    // Reactivar la celda
+    pthread_mutex_lock(&celda->mutex);
+    celda->estado = CELDA_ACTIVA;
+    celda->trabajando_en_set = false;
+    celda->devolviendo_piezas = false;
+    celda->ciclos_sin_progreso = 0;
+    pthread_mutex_unlock(&celda->mutex);
+    
+    // Limpiar la caja
+    pthread_mutex_lock(&celda->caja.mutex);
+    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+        celda->caja.piezas_por_tipo[t] = 0;
+    }
+    celda->caja.completa = false;
+    pthread_mutex_unlock(&celda->caja.mutex);
+    
+    // Limpiar buffer
+    pthread_mutex_lock(&celda->buffer_mutex);
+    celda->buffer_count = 0;
+    pthread_mutex_unlock(&celda->buffer_mutex);
+    
+    sistema->celdas_habilitadas[celda_id] = true;
+    sistema->num_celdas_activas++;
+    sistema->ciclos_inactiva[celda_id] = 0;
+    
+    printf("[GESTOR] Celda %d activada en posición %d (activas: %d)\n", 
+           celda_id + 1, celda->posicion_banda, sistema->num_celdas_activas);
+    
+    pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+    return true;
+}
+
+// Hilo gestor que monitorea y gestiona celdas dinámicamente
+void* thread_gestor_celdas(void* arg) {
+    (void)arg;
+    
+    // Mensaje de inicio eliminado para reducir ruido
+    
+    int ultimo_tacho = 0;
+    int ciclos_sin_cambios = 0;
+    
+    // Esperar un poco antes de empezar a monitorear
+    sleep(3);
+    
+    while (!sistema->terminar) {
+        sleep(2);  // Revisar cada 2 segundos
+        
+        if (sistema->terminar) break;
+        
+        pthread_mutex_lock(&sistema->mutex_celdas_dinamicas);
+        
+        // Obtener métricas actuales
+        pthread_mutex_lock(&sistema->stats.mutex);
+        int piezas_tacho_actual = sistema->stats.total_piezas_tacho;
+        pthread_mutex_unlock(&sistema->stats.mutex);
+        
+        pthread_mutex_lock(&sistema->mutex_sets);
+        int sets_completados = sistema->sets_completados_total;
+        int sets_en_proceso = sistema->sets_en_proceso;
+        int sets_pendientes = sistema->config.num_sets - sets_completados - sets_en_proceso;
+        pthread_mutex_unlock(&sistema->mutex_sets);
+        
+        // Calcular piezas al tacho desde última revisión
+        int piezas_tacho_recientes = piezas_tacho_actual - ultimo_tacho;
+        ultimo_tacho = piezas_tacho_actual;
+        
+        // Contar celdas que están trabajando vs inactivas
+        int celdas_trabajando = 0;
+        int celdas_ociosas = 0;
+        
+        for (int c = 0; c < sistema->config.num_celdas; c++) {
+            if (!sistema->celdas_habilitadas[c]) continue;
+            
+            CeldaEmpaquetado *celda = &sistema->celdas[c];
+            pthread_mutex_lock(&celda->mutex);
+            bool trabajando = celda->trabajando_en_set;
+            EstadoCelda estado = celda->estado;
+            pthread_mutex_unlock(&celda->mutex);
+            
+            if (trabajando || estado == CELDA_ESPERANDO_OP) {
+                celdas_trabajando++;
+                sistema->ciclos_inactiva[c] = 0;
+            } else {
+                sistema->ciclos_inactiva[c]++;
+                if (sistema->ciclos_inactiva[c] > 5) {  // 10 segundos sin actividad
+                    celdas_ociosas++;
+                }
+            }
+        }
+        
+        pthread_mutex_unlock(&sistema->mutex_celdas_dinamicas);
+        
+        // ========== DECISIÓN: QUITAR CELDA ==========
+        // Si hay celdas ociosas por mucho tiempo y hay pocas tareas pendientes
+        if (celdas_ociosas > 0 && sets_pendientes <= sistema->num_celdas_activas / 2) {
+            // Buscar la celda más ociosa que pueda quitarse
+            int celda_mas_ociosa = -1;
+            int max_ciclos_ociosa = 0;
+            
+            for (int c = sistema->config.num_celdas - 1; c >= 0; c--) {  // Empezar desde el final
+                if (sistema->celdas_habilitadas[c] && 
+                    sistema->ciclos_inactiva[c] > max_ciclos_ociosa &&
+                    sistema->num_celdas_activas > 1) {  // Mantener al menos 1 celda
+                    celda_mas_ociosa = c;
+                    max_ciclos_ociosa = sistema->ciclos_inactiva[c];
+                }
+            }
+            
+            if (celda_mas_ociosa >= 0 && max_ciclos_ociosa > 8) {  // 16 segundos ociosa
+                quitar_celda_dinamica(celda_mas_ociosa);
+                ciclos_sin_cambios = 0;
+            }
+        }
+        
+        // ========== DECISIÓN: AGREGAR CELDA ==========
+        // Si muchas piezas van al tacho y hay celdas desactivadas
+        if (piezas_tacho_recientes > 2 && sets_pendientes > 0) {
+            // Buscar una celda desactivada para reactivar
+            for (int c = 0; c < sistema->config.num_celdas; c++) {
+                if (!sistema->celdas_habilitadas[c]) {
+                    agregar_celda_dinamica(c);
+                    ciclos_sin_cambios = 0;
+                    break;
+                }
+            }
+        }
+        
+        // Si todas las celdas están trabajando y hay sets pendientes, reactivar alguna
+        if (celdas_trabajando == sistema->num_celdas_activas && 
+            sets_pendientes > sistema->num_celdas_activas) {
+            for (int c = 0; c < sistema->config.num_celdas; c++) {
+                if (!sistema->celdas_habilitadas[c]) {
+                    agregar_celda_dinamica(c);
+                    ciclos_sin_cambios = 0;
+                    break;
+                }
+            }
+        }
+        
+        ciclos_sin_cambios++;
+    }
+    
+    // Mensaje de terminación eliminado para reducir ruido
     return NULL;
 }

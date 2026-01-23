@@ -53,4 +53,18 @@ typedef struct {
     int brazo_id;
 } ArgsBrazo;
 
+// ============= GESTIÓN DINÁMICA DE CELDAS =============
+
+// Verifica si una celda puede ser quitada de forma segura
+bool celda_puede_quitarse(CeldaEmpaquetado *celda);
+
+// Quita una celda del sistema (la desactiva)
+bool quitar_celda_dinamica(int celda_id);
+
+// Agrega/reactiva una celda en el sistema
+bool agregar_celda_dinamica(int celda_id);
+
+// Hilo gestor que monitorea y gestiona celdas dinámicamente
+void* thread_gestor_celdas(void* arg);
+
 #endif // CELDA_H

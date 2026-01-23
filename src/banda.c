@@ -67,8 +67,7 @@ void* thread_banda(void* arg) {
     
     int intervalo_us = 1000000 / sistema->banda.velocidad;
     
-    printf("[BANDA] Iniciada - velocidad: %d pasos/seg, longitud: %d\n",
-           sistema->banda.velocidad, sistema->banda.longitud);
+    // Mensaje de inicio eliminado para reducir ruido
     
     while (!sistema->terminar) {
         usleep(intervalo_us);
@@ -86,10 +85,12 @@ void* thread_banda(void* arg) {
                 pthread_mutex_lock(&sistema->stats.mutex);
                 sistema->stats.piezas_en_tacho[tipo]++;
                 sistema->stats.total_piezas_tacho++;
+                int total_tacho = sistema->stats.total_piezas_tacho;
                 pthread_mutex_unlock(&sistema->stats.mutex);
-                printf("[BANDA] Pieza tipo %s cayó al tacho (total tacho: %d)\n", 
-                       nombre_tipo_pieza(ultima->piezas[p].tipo),
-                       sistema->stats.total_piezas_tacho);
+                // Solo mostrar mensaje cada 5 piezas para reducir ruido
+                if (total_tacho % 5 == 0) {
+                    printf("[BANDA] %d piezas han caído al tacho\n", total_tacho);
+                }
             }
         }
         ultima->num_piezas = 0;
@@ -117,6 +118,6 @@ void* thread_banda(void* arg) {
         pthread_mutex_unlock(&sistema->banda.mutex_global);
     }
     
-    printf("[BANDA] Terminada\n");
+    // Mensaje de terminación eliminado para reducir ruido
     return NULL;
 }

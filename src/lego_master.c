@@ -212,6 +212,9 @@ static void inicializar_sistema(int argc, char* argv[]) {
     sistema->sets_en_proceso = 0;
     sistema->sets_completados_total = 0;
     pthread_mutex_init(&sistema->mutex_sets, NULL);
+    
+    // Inicializar turno de celdas (la primera celda empieza)
+    sistema->celda_activa = 0;
 
     // Mostrar configuración
     int total_piezas_set = sistema->config.piezas_por_tipo[0] +

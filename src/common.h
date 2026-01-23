@@ -153,6 +153,8 @@ typedef struct {
     int sets_en_proceso;             // SETs que están siendo llenados actualmente
     int sets_completados_total;      // Total de SETs completados (OK + pendientes de confirmar)
     pthread_mutex_t mutex_sets;      // Mutex para control de sets
+    // Control de turno de celdas
+    int celda_activa;                // Índice de la celda que tiene el turno (-1 = ninguna)
 } SistemaLego;
 
 // Funciones de utilidad

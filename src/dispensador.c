@@ -114,8 +114,13 @@ void* thread_dispensador(void* arg) {
     
     // Esperar a que todos los SETs sean confirmados por el operador (con timeout)
     printf("[DISPENSADORES] Esperando confirmación de SETs pendientes...\n");
-    int timeout_confirmacion = 10; // máximo 10 segundos esperando confirmaciones
+    
+    // Calcular timeout basado en el número de SETs y tiempo máximo del operador
+    int timeout_confirmacion = sistema->config.num_sets * 
+                               (sistema->config.delta_t1_max / 1000 + 2) + 15;
     int tiempo_esperado = 0;
+    int ultimo_completado = 0;
+    int ciclos_sin_progreso = 0;
     
     while (!sistema->terminar && tiempo_esperado < timeout_confirmacion) {
         pthread_mutex_lock(&sistema->mutex_sets);
@@ -125,14 +130,109 @@ void* thread_dispensador(void* arg) {
         
         // Si ya se completaron todos los SETs esperados, terminar
         if (completados >= sistema->config.num_sets) {
-            printf("[DISPENSADORES] Todos los SETs confirmados. Terminando simulación.\n");
+            printf("[DISPENSADORES] Todos los SETs confirmados (%d/%d). Terminando simulación.\n",
+                   completados, sistema->config.num_sets);
             break;
         }
         
-        // Si no hay SETs en proceso y no se completaron todos, terminar
-        if (en_proceso == 0 && completados < sistema->config.num_sets) {
-            printf("[DISPENSADORES] No hay más SETs en proceso. Terminando con %d/%d completados.\n",
-                   completados, sistema->config.num_sets);
+        // Verificar si hay progreso
+        if (completados > ultimo_completado) {
+            ultimo_completado = completados;
+            ciclos_sin_progreso = 0;
+        } else {
+            ciclos_sin_progreso++;
+        }
+        
+        // Contar piezas totales disponibles (banda + buffers + cajas)
+        int piezas_disponibles = 0;
+        
+        // Piezas en la banda
+        for (int i = 0; i < sistema->banda.longitud; i++) {
+            PosicionBanda *pos = &sistema->banda.posiciones[i];
+            pthread_mutex_lock(&pos->mutex);
+            piezas_disponibles += pos->num_piezas;
+            pthread_mutex_unlock(&pos->mutex);
+        }
+        
+        // Piezas en buffers y cajas de las celdas
+        for (int c = 0; c < sistema->config.num_celdas; c++) {
+            CeldaEmpaquetado *celda = &sistema->celdas[c];
+            pthread_mutex_lock(&celda->buffer_mutex);
+            piezas_disponibles += celda->buffer_count;
+            pthread_mutex_unlock(&celda->buffer_mutex);
+            
+            pthread_mutex_lock(&celda->caja.mutex);
+            for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                piezas_disponibles += celda->caja.piezas_por_tipo[t];
+            }
+            pthread_mutex_unlock(&celda->caja.mutex);
+        }
+        
+        // Calcular piezas necesarias para completar los SETs restantes
+        int sets_restantes = sistema->config.num_sets - completados;
+        int piezas_por_set = 0;
+        for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+            piezas_por_set += sistema->config.piezas_por_tipo[t];
+        }
+        int piezas_necesarias = sets_restantes * piezas_por_set;
+        
+        // Si no hay suficientes piezas para completar más SETs, terminar
+        // NOTA: Aunque haya SETs en proceso, si no hay piezas suficientes,
+        // las celdas deberían liberar sus piezas para que otras las usen
+        if (piezas_disponibles < piezas_necesarias && en_proceso == 0) {
+            printf("[DISPENSADORES] No hay suficientes piezas para más SETs "
+                   "(disponibles: %d, necesarias: %d). Terminando con %d/%d completados.\n",
+                   piezas_disponibles, piezas_necesarias, completados, sistema->config.num_sets);
+            break;
+        }
+        
+        // Forzar liberación de piezas si hay celdas estancadas con SETs en proceso
+        // pero sin progreso durante mucho tiempo
+        if (en_proceso > 0 && ciclos_sin_progreso > 6) {  // 3 segundos sin progreso con SETs en proceso
+            printf("[DISPENSADORES] Detectado estancamiento con %d SETs en proceso. Forzando liberación de piezas...\n", 
+                   en_proceso);
+            
+            // Buscar celdas estancadas y forzar liberación de piezas
+            for (int c = 0; c < sistema->config.num_celdas; c++) {
+                CeldaEmpaquetado *celda = &sistema->celdas[c];
+                
+                pthread_mutex_lock(&celda->mutex);
+                bool trabajando = celda->trabajando_en_set;
+                EstadoCelda estado = celda->estado;
+                pthread_mutex_unlock(&celda->mutex);
+                
+                // Si la celda está trabajando pero no esperando al operador,
+                // y no ha progresado, forzar liberación
+                if (trabajando && estado == CELDA_ACTIVA) {
+                    // Verificar si esta celda puede completar su SET
+                    int piezas_celda = 0;
+                    int faltan_celda = 0;
+                    
+                    pthread_mutex_lock(&celda->caja.mutex);
+                    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                        piezas_celda += celda->caja.piezas_por_tipo[t];
+                        faltan_celda += celda->caja.piezas_necesarias[t] - celda->caja.piezas_por_tipo[t];
+                    }
+                    pthread_mutex_unlock(&celda->caja.mutex);
+                    
+                    // Si tiene piezas pero no puede completar, liberar
+                    if (piezas_celda > 0 && faltan_celda > 0) {
+                        printf("[DISPENSADORES] Celda %d estancada (tiene %d piezas, faltan %d). Forzando liberación.\n",
+                               c + 1, piezas_celda, faltan_celda);
+                        devolver_piezas_a_banda(celda);
+                    }
+                }
+            }
+            
+            // Resetear contador para dar tiempo a que el sistema se recupere
+            ciclos_sin_progreso = 0;
+        }
+        
+        // Si no hay progreso después de varios ciclos
+        if (ciclos_sin_progreso > 20) {  // 10 segundos sin progreso
+            printf("[DISPENSADORES] Sin progreso por %d segundos. "
+                   "Terminando con %d/%d completados.\n",
+                   ciclos_sin_progreso / 2, completados, sistema->config.num_sets);
             break;
         }
         

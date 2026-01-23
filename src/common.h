@@ -106,6 +106,7 @@ typedef struct {
     int cajas_completadas_ok;
     int cajas_completadas_fail;
     bool trabajando_en_set;          // Si ya tomó piezas para un SET
+    bool devolviendo_piezas;         // Si está en proceso de devolver piezas
     // Buffer de piezas retiradas esperando a ser colocadas
     Pieza buffer[MAX_BUFFER_CELDA];
     int buffer_count;

@@ -38,6 +38,7 @@ void inicializar_celda(CeldaEmpaquetado *celda, int id, int posicion,
     celda->cajas_completadas_ok = 0;
     celda->cajas_completadas_fail = 0;
     celda->trabajando_en_set = false;
+    celda->devolviendo_piezas = false;
     pthread_mutex_init(&celda->mutex, NULL);
     
     // Semáforo para limitar brazos retirando (máx 2)
@@ -512,6 +513,11 @@ bool otra_celda_necesita_piezas(CeldaEmpaquetado *celda) {
 
 // Devuelve las piezas de la caja y buffer a la banda
 void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
+    // Marcar que estamos devolviendo piezas para que los brazos no interfieran
+    pthread_mutex_lock(&celda->mutex);
+    celda->devolviendo_piezas = true;
+    pthread_mutex_unlock(&celda->mutex);
+    
     printf("[CELDA %d] ⚠ Devolviendo piezas a la banda (SET incompleto, ayudando a otras celdas)\n", 
            celda->id + 1);
     
@@ -581,10 +587,11 @@ void devolver_piezas_a_banda(CeldaEmpaquetado *celda) {
     }
     pthread_mutex_unlock(&celda->buffer_mutex);
     
-    // Marcar que la celda ya no está trabajando en un SET
+    // Marcar que la celda ya no está trabajando en un SET y terminar devolución
     pthread_mutex_lock(&celda->mutex);
     celda->trabajando_en_set = false;
     celda->ciclos_sin_progreso = 0;
+    celda->devolviendo_piezas = false;
     pthread_mutex_unlock(&celda->mutex);
     
     // Decrementar SETs en proceso
@@ -679,10 +686,17 @@ void* thread_brazo(void* arg) {
         // Verificar estado de la celda
         pthread_mutex_lock(&celda->mutex);
         EstadoCelda estado_celda = celda->estado;
+        bool devolviendo = celda->devolviendo_piezas;
         pthread_mutex_unlock(&celda->mutex);
         
         if (estado_celda == CELDA_INACTIVA) {
             usleep(100000);
+            continue;
+        }
+        
+        // Si la celda está devolviendo piezas, NO hacer nada
+        if (devolviendo) {
+            usleep(50000);
             continue;
         }
         
@@ -904,41 +918,77 @@ void* thread_brazo(void* arg) {
             int ciclos = celda->ciclos_sin_progreso;
             pthread_mutex_unlock(&celda->mutex);
             
-            // Después de ~1 segundo (100 ciclos * 10ms), verificar si podemos completar
-            // Reducido de 200 a 100 para ser más reactivo
-            if (ciclos > 100) {
-                // Contar piezas que me faltan
-                int piezas_faltan = 0;
-                int piezas_disponibles = 0;
+            // Después de ~2 segundos (200 ciclos * 10ms), verificar si podemos completar
+            // Aumentado para dar más tiempo a que lleguen las piezas
+            if (ciclos > 200) {
+                // Contar piezas que me faltan POR TIPO
+                int piezas_faltan_por_tipo[MAX_TIPOS_PIEZA] = {0};
+                int piezas_faltan_total = 0;
                 
                 pthread_mutex_lock(&celda->caja.mutex);
                 for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
-                    int faltan_tipo = celda->caja.piezas_necesarias[t] - celda->caja.piezas_por_tipo[t];
-                    if (faltan_tipo > 0) {
-                        piezas_faltan += faltan_tipo;
+                    int faltan = celda->caja.piezas_necesarias[t] - celda->caja.piezas_por_tipo[t];
+                    if (faltan > 0) {
+                        piezas_faltan_por_tipo[t] = faltan;
+                        piezas_faltan_total += faltan;
                     }
                 }
                 pthread_mutex_unlock(&celda->caja.mutex);
                 
-                // Contar piezas en mi buffer
+                // Si ya no faltan piezas, no hacer nada
+                if (piezas_faltan_total == 0) {
+                    pthread_mutex_lock(&celda->mutex);
+                    celda->ciclos_sin_progreso = 0;
+                    pthread_mutex_unlock(&celda->mutex);
+                    usleep(10000);
+                    continue;
+                }
+                
+                // Contar piezas disponibles POR TIPO (en buffer + banda antes de mi posición)
+                int piezas_disponibles_por_tipo[MAX_TIPOS_PIEZA] = {0};
+                
+                // Piezas en mi buffer
                 pthread_mutex_lock(&celda->buffer_mutex);
-                piezas_disponibles += celda->buffer_count;
+                for (int i = 0; i < celda->buffer_count; i++) {
+                    int tipo = celda->buffer[i].tipo;
+                    if (tipo >= 1 && tipo <= MAX_TIPOS_PIEZA) {
+                        piezas_disponibles_por_tipo[tipo - 1]++;
+                    }
+                }
                 pthread_mutex_unlock(&celda->buffer_mutex);
                 
-                // Contar piezas en la banda que aún no han pasado mi posición
+                // Piezas en la banda que aún no han pasado mi posición
                 for (int i = 0; i <= celda->posicion_banda; i++) {
                     PosicionBanda *pos = &sistema->banda.posiciones[i];
                     pthread_mutex_lock(&pos->mutex);
-                    piezas_disponibles += pos->num_piezas;
+                    for (int p = 0; p < pos->num_piezas; p++) {
+                        int tipo = pos->piezas[p].tipo;
+                        if (tipo >= 1 && tipo <= MAX_TIPOS_PIEZA) {
+                            piezas_disponibles_por_tipo[tipo - 1]++;
+                        }
+                    }
                     pthread_mutex_unlock(&pos->mutex);
+                }
+                
+                // Verificar si puedo completar el SET con las piezas disponibles
+                bool puedo_completar = true;
+                for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                    if (piezas_faltan_por_tipo[t] > piezas_disponibles_por_tipo[t]) {
+                        puedo_completar = false;
+                        break;
+                    }
                 }
                 
                 // Si no hay suficientes piezas para completar el SET y NO soy la última celda
                 bool es_ultima_celda = (c == sistema->config.num_celdas - 1);
                 
-                if (piezas_disponibles < piezas_faltan && !es_ultima_celda) {
+                if (!puedo_completar && !es_ultima_celda) {
+                    int piezas_disponibles_total = 0;
+                    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                        piezas_disponibles_total += piezas_disponibles_por_tipo[t];
+                    }
                     printf("[CELDA %d] No hay suficientes piezas (disponibles: %d, faltan: %d). Liberando para siguiente celda.\n",
-                           c+1, piezas_disponibles, piezas_faltan);
+                           c+1, piezas_disponibles_total, piezas_faltan_total);
                     devolver_piezas_a_banda(celda);
                     ya_trabajando = false;
                 } else {

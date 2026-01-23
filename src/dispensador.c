@@ -188,8 +188,8 @@ void* thread_dispensador(void* arg) {
         
         // Forzar liberación de piezas si hay celdas estancadas con SETs en proceso
         // pero sin progreso durante mucho tiempo
-        if (en_proceso > 0 && ciclos_sin_progreso > 6) {  // 3 segundos sin progreso con SETs en proceso
-            printf("[DISPENSADORES] Detectado estancamiento con %d SETs en proceso. Forzando liberación de piezas...\n", 
+        if (en_proceso > 0 && ciclos_sin_progreso > 10) {  // 5 segundos sin progreso con SETs en proceso
+            printf("[DISPENSADORES] Detectado estancamiento con %d SETs en proceso. Verificando celdas...\n", 
                    en_proceso);
             
             // Buscar celdas estancadas y forzar liberación de piezas
@@ -199,25 +199,69 @@ void* thread_dispensador(void* arg) {
                 pthread_mutex_lock(&celda->mutex);
                 bool trabajando = celda->trabajando_en_set;
                 EstadoCelda estado = celda->estado;
+                bool devolviendo = celda->devolviendo_piezas;
                 pthread_mutex_unlock(&celda->mutex);
                 
-                // Si la celda está trabajando pero no esperando al operador,
-                // y no ha progresado, forzar liberación
-                if (trabajando && estado == CELDA_ACTIVA) {
-                    // Verificar si esta celda puede completar su SET
+                // Si la celda está trabajando pero no esperando al operador ni devolviendo
+                if (trabajando && estado == CELDA_ACTIVA && !devolviendo) {
+                    // Verificar si esta celda puede completar su SET por tipo
+                    int piezas_faltan_por_tipo[MAX_TIPOS_PIEZA] = {0};
                     int piezas_celda = 0;
                     int faltan_celda = 0;
                     
                     pthread_mutex_lock(&celda->caja.mutex);
                     for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
                         piezas_celda += celda->caja.piezas_por_tipo[t];
-                        faltan_celda += celda->caja.piezas_necesarias[t] - celda->caja.piezas_por_tipo[t];
+                        int faltan = celda->caja.piezas_necesarias[t] - celda->caja.piezas_por_tipo[t];
+                        if (faltan > 0) {
+                            piezas_faltan_por_tipo[t] = faltan;
+                            faltan_celda += faltan;
+                        }
                     }
                     pthread_mutex_unlock(&celda->caja.mutex);
                     
-                    // Si tiene piezas pero no puede completar, liberar
-                    if (piezas_celda > 0 && faltan_celda > 0) {
-                        printf("[DISPENSADORES] Celda %d estancada (tiene %d piezas, faltan %d). Forzando liberación.\n",
+                    // Si no le falta nada, no hacer nada
+                    if (faltan_celda == 0) continue;
+                    
+                    // Contar piezas disponibles por tipo (banda + buffer)
+                    int piezas_disponibles_por_tipo[MAX_TIPOS_PIEZA] = {0};
+                    
+                    // Piezas en buffer
+                    pthread_mutex_lock(&celda->buffer_mutex);
+                    for (int i = 0; i < celda->buffer_count; i++) {
+                        int tipo = celda->buffer[i].tipo;
+                        if (tipo >= 1 && tipo <= MAX_TIPOS_PIEZA) {
+                            piezas_disponibles_por_tipo[tipo - 1]++;
+                        }
+                    }
+                    pthread_mutex_unlock(&celda->buffer_mutex);
+                    
+                    // Piezas en banda antes de esta celda
+                    for (int i = 0; i <= celda->posicion_banda; i++) {
+                        PosicionBanda *pos = &sistema->banda.posiciones[i];
+                        pthread_mutex_lock(&pos->mutex);
+                        for (int p = 0; p < pos->num_piezas; p++) {
+                            int tipo = pos->piezas[p].tipo;
+                            if (tipo >= 1 && tipo <= MAX_TIPOS_PIEZA) {
+                                piezas_disponibles_por_tipo[tipo - 1]++;
+                            }
+                        }
+                        pthread_mutex_unlock(&pos->mutex);
+                    }
+                    
+                    // Verificar si puede completar
+                    bool puede_completar = true;
+                    for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
+                        if (piezas_faltan_por_tipo[t] > piezas_disponibles_por_tipo[t]) {
+                            puede_completar = false;
+                            break;
+                        }
+                    }
+                    
+                    // Solo forzar liberación si NO puede completar y NO es la última celda
+                    bool es_ultima_celda = (c == sistema->config.num_celdas - 1);
+                    if (!puede_completar && !es_ultima_celda && piezas_celda > 0) {
+                        printf("[DISPENSADORES] Celda %d no puede completar (tiene %d piezas, faltan %d). Forzando liberación.\n",
                                c + 1, piezas_celda, faltan_celda);
                         devolver_piezas_a_banda(celda);
                     }
@@ -228,12 +272,28 @@ void* thread_dispensador(void* arg) {
             ciclos_sin_progreso = 0;
         }
         
-        // Si no hay progreso después de varios ciclos
-        if (ciclos_sin_progreso > 20) {  // 10 segundos sin progreso
+        // Verificar si hay alguna celda esperando al operador
+        bool hay_celda_esperando_operador = false;
+        for (int c = 0; c < sistema->config.num_celdas; c++) {
+            pthread_mutex_lock(&sistema->celdas[c].mutex);
+            if (sistema->celdas[c].estado == CELDA_ESPERANDO_OP) {
+                hay_celda_esperando_operador = true;
+            }
+            pthread_mutex_unlock(&sistema->celdas[c].mutex);
+            if (hay_celda_esperando_operador) break;
+        }
+        
+        // Si no hay progreso después de varios ciclos Y no hay celda esperando al operador
+        if (ciclos_sin_progreso > 20 && !hay_celda_esperando_operador) {  // 10 segundos sin progreso
             printf("[DISPENSADORES] Sin progreso por %d segundos. "
                    "Terminando con %d/%d completados.\n",
                    ciclos_sin_progreso / 2, completados, sistema->config.num_sets);
             break;
+        }
+        
+        // Si hay una celda esperando al operador, resetear timeout parcialmente
+        if (hay_celda_esperando_operador && ciclos_sin_progreso > 10) {
+            ciclos_sin_progreso = 10;  // No dejar que crezca demasiado mientras espera operador
         }
         
         usleep(500000);  // Revisar cada 0.5 segundos

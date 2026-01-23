@@ -22,11 +22,15 @@ void imprimir_estadisticas(Estadisticas *stats, ConfiguracionSistema *config) {
     for (int t = 0; t < MAX_TIPOS_PIEZA; t++) {
         piezas_esperadas += config->piezas_por_tipo[t] * config->num_sets;
     }
-    int piezas_en_cajas = stats->cajas_ok * (config->piezas_por_tipo[0] + 
-                                              config->piezas_por_tipo[1] +
-                                              config->piezas_por_tipo[2] +
-                                              config->piezas_por_tipo[3]);
-    (void)piezas_esperadas; // Suprimir warning si no se usa
+    int piezas_por_set = config->piezas_por_tipo[0] + 
+                         config->piezas_por_tipo[1] +
+                         config->piezas_por_tipo[2] +
+                         config->piezas_por_tipo[3];
+    int piezas_en_cajas = stats->cajas_ok * piezas_por_set;
+    
+    // Calcular piezas perdidas
+    int piezas_contabilizadas = piezas_en_cajas + stats->total_piezas_tacho;
+    int piezas_perdidas = stats->total_piezas_dispensadas - piezas_contabilizadas;
     
     printf("\n");
     printf("╔═══════════════════════════════════════════════════════════════════╗\n");
@@ -41,6 +45,9 @@ void imprimir_estadisticas(Estadisticas *stats, ConfiguracionSistema *config) {
     printf("║ Total piezas dispensadas:                 %4d                     ║\n", stats->total_piezas_dispensadas);
     printf("║ Piezas en cajas OK:                       %4d                     ║\n", piezas_en_cajas);
     printf("║ Piezas en tacho (sobrantes):              %4d                     ║\n", stats->total_piezas_tacho);
+    if (piezas_perdidas > 0) {
+        printf("║ ⚠ Piezas no contabilizadas:               %4d                     ║\n", piezas_perdidas);
+    }
     printf("╠═══════════════════════════════════════════════════════════════════╣\n");
     printf("║                  PIEZAS SOBRANTES POR TIPO                        ║\n");
     printf("╠═══════════════════════════════════════════════════════════════════╣\n");

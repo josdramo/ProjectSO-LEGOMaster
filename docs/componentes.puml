@@ -14,7 +14,7 @@ title **LEGO Master - Diagrama de Componentes**
 ' ============================================
 
 package "Control Principal" as MAIN #FFFDE7 {
-    component [lego_master.c\n──────────\n• main()\n• Parsea argumentos\n• Crea todos los hilos\n• Espera terminación\n• Muestra estadísticas] as LM
+    component "lego_master.c\n──────────\n• main()\n• Parsea argumentos\n• Crea todos los hilos\n• Espera terminación\n• Muestra estadísticas" as LM
 }
 
 ' ============================================
@@ -23,15 +23,15 @@ package "Control Principal" as MAIN #FFFDE7 {
 
 package "Hilos del Sistema" as THREADS #E3F2FD {
     
-    component [thread_banda\n──────────\n• Mueve piezas cada 1/v seg\n• Envía sobrantes al tacho] as TB
+    component "thread_banda\n──────────\n• Mueve piezas cada 1/v seg\n• Envía sobrantes al tacho" as TB
     
-    component [thread_dispensador\n──────────\n• 3 dispensadores fijos\n• 80% probabilidad/ciclo\n• Balanceo cada Y piezas] as TD
+    component "thread_dispensador\n──────────\n• 3 dispensadores fijos\n• 80% probabilidad/ciclo\n• Balanceo cada Y piezas" as TD
     
-    component [thread_brazo x4\n──────────\n• Retira pieza de banda\n• Coloca en caja\n• Usa buffer temporal] as TBR
+    component "thread_brazo x4\n──────────\n• Retira pieza de banda\n• Coloca en caja\n• Usa buffer temporal" as TBR
     
-    component [thread_operador\n──────────\n• Verifica cajas completas\n• Decide OK/FAIL\n• Tiempo: 0 a Δt₁] as TO
+    component "thread_operador\n──────────\n• Verifica cajas completas\n• Decide OK/FAIL\n• Tiempo: 0 a Δt₁" as TO
     
-    component [thread_gestor_celdas\n──────────\n• Monitorea actividad\n• Activa/desactiva celdas\n• Optimiza recursos] as TG
+    component "thread_gestor_celdas\n──────────\n• Monitorea actividad\n• Activa/desactiva celdas\n• Optimiza recursos" as TG
 }
 
 ' ============================================
@@ -42,11 +42,11 @@ package "Estructuras Compartidas" as DATA #FFEBEE {
     
     node "SistemaLego\n(struct global)" as SL
     
-    node "BandaTransportadora\n──────────\n• posiciones[N]\n• velocidad\n• longitud" as BANDA
+    node "BandaTransportadora\n──────────\n• posiciones\[N\]\n• velocidad\n• longitud" as BANDA
     
-    node "CeldaEmpaquetado[4]\n──────────\n• brazos[4]\n• caja\n• buffer[20]\n• posicion_banda" as CELDA
+    node "CeldaEmpaquetado\[4\]\n──────────\n• brazos\[4\]\n• caja\n• buffer\[20\]\n• posicion_banda" as CELDA
     
-    node "Estadisticas\n──────────\n• piezas_dispensadas\n• piezas_tacho[4]\n• cajas_ok/fail" as STATS
+    node "Estadisticas\n──────────\n• piezas_dispensadas\n• piezas_tacho\[4\]\n• cajas_ok/fail" as STATS
 }
 
 ' ============================================
@@ -55,15 +55,15 @@ package "Estructuras Compartidas" as DATA #FFEBEE {
 
 package "Mecanismos de Sincronización" as SYNC #E8F5E9 {
     
-    component [mutex_posicion[N]\n──────────\nAcceso exclusivo\na cada posición] as MP
+    component "mutex_posicion[N]\n──────────\nAcceso exclusivo\na cada posición" as MP
     
-    component [sem_brazos_retirando\n──────────\nMáx 2 brazos\nretirando a la vez] as SBR
+    component "sem_brazos_retirando\n──────────\nMáx 2 brazos\nretirando a la vez" as SBR
     
-    component [sem_acceso_caja\n──────────\nSolo 1 brazo\ncoloca a la vez] as SAC
+    component "sem_acceso_caja\n──────────\nSolo 1 brazo\ncoloca a la vez" as SAC
     
-    component [mutex_sets\n──────────\nControl de SETs\nen proceso] as MS
+    component "mutex_sets\n──────────\nControl de SETs\nen proceso" as MS
     
-    component [mutex_celdas_dinamicas\n──────────\nActivar/desactivar\nceldas] as MCD
+    component "mutex_celdas_dinamicas\n──────────\nActivar/desactivar\nceldas" as MCD
 }
 
 ' ============================================
@@ -71,7 +71,7 @@ package "Mecanismos de Sincronización" as SYNC #E8F5E9 {
 ' ============================================
 
 package "Utilidades" as UTILS #F3E5F5 {
-    component [utils.c\n──────────\n• nombre_tipo_pieza()\n• imprimir_estadisticas()\n• imprimir_estado_banda()] as UT
+    component "utils.c\n──────────\n• nombre_tipo_pieza()\n• imprimir_estadisticas()\n• imprimir_estado_banda()" as UT
 }
 
 ' ============================================
